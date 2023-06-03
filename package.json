@@ -1,0 +1,31 @@
+{
+	"name": "whitespider",
+	"version": "0.0.1",
+	"author": {
+		"name": "ChromeHack Team",
+		"email": "support@chromehack.com",
+		"url": "https://chromehack.com/"
+	},
+	"bugs": "https://github.com/chromehackteam/whitespider/issues",
+	"homepage": "https://github.com/chromehackteam/whitespider",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/chromehackteam/whitespider.git"
+	},
+	"license": "GPL-3.0",
+	"description": "",
+	"type": "module",
+	"main": "main.js",
+	"files": [],
+	"keywords": [],
+	"dependencies": {
+		"@magenta/music": "^1.23.1",
+		"node-fetch": "^3.3.1",
+		"puppeteer": "^20.4.0",
+		"socket.io": "^4.6.1"
+	},
+	"scripts": {
+		"start": "nohup node . > /dev/null &",
+		"build": "echo \"Invalid command\"; exit 1"
+	}
+}
