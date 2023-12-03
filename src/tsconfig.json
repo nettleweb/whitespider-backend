@@ -1,0 +1,23 @@
+{
+	"compilerOptions": {
+		"lib": ["ES2022"],
+		"types": ["node"],
+		"target": "ES2022",
+		"module": "Node16",
+		"strict": true,
+		"outDir": "../out/",
+		"allowJs": true,
+		"checkJs": false,
+		"sourceMap": false,
+		"alwaysStrict": true,
+		"moduleResolution": "Node16",
+		"strictNullChecks": true,
+		"strictFunctionTypes": true,
+		"strictPropertyInitialization": true,
+		"forceConsistentCasingInFileNames": true
+	},
+	"compileOnSave": true,
+	"buildOptions": {
+		"verbose": true
+	}
+}

@@ -1,31 +1,35 @@
 {
-	"name": "whitespider",
-	"version": "0.0.1",
-	"author": {
-		"name": "ChromeHack Team",
-		"email": "support@chromehack.com",
-		"url": "https://chromehack.com/"
-	},
-	"bugs": "https://github.com/chromehackteam/whitespider/issues",
-	"homepage": "https://github.com/chromehackteam/whitespider",
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/chromehackteam/whitespider.git"
-	},
+	"name": "whitespider-backend",
+	"author": "WhiteSpider Dev Team",
 	"license": "GPL-3.0",
-	"description": "",
-	"type": "module",
+	"version": "0.0.1",
+	"homepage": "https://github.com/whitespider-dev/whitespider-backend#readme",
+	"description": "WhiteSpider Unblocker Backend",
 	"main": "main.js",
+	"type": "module",
 	"files": [],
 	"keywords": [],
+	"engines": {
+		"node": ">=18.17.1",
+		"vscode": "^1.22.0"
+	},
+	"bugs": {
+		"url": "https://github.com/whitespider-dev/whitespider-backend/issues",
+		"email": "admin@whitespider.qq"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/whitespider-dev/whitespider-backend.git"
+	},
 	"dependencies": {
-		"@magenta/music": "^1.23.1",
-		"node-fetch": "^3.3.1",
-		"puppeteer": "^20.4.0",
-		"socket.io": "^4.6.1"
+		"puppeteer": "^21.5.2",
+		"socket.io": "^4.7.2"
+	},
+	"devDependencies": {
+		"typescript": "^5.2.2"
 	},
 	"scripts": {
-		"start": "nohup node . > /dev/null &",
-		"build": "echo \"Invalid command\"; exit 1"
+		"build": "./scripts/build.sh",
+		"start": "./scripts/start.sh"
 	}
 }

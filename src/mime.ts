@@ -1,7 +1,4 @@
-/**
- * @type {Record<string, string>}
- */
-const mime = {
+const mime: Record<string, string> = {
 	".*3gpp": "audio/3gpp",
 	".*ac": "application/vnd.nokia.n-gage.ac+xml",
 	".*bdoc": "application/x-bdoc",

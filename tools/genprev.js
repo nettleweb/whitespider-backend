@@ -4,9 +4,10 @@ import fs from "fs";
 import hosts from "../hosts.js";
 import chrome from "../chrome.js";
 
-for (const line of fs.readFileSync("./static/games/list.txt", "utf-8").split("\n")) {
+for (const line of fs.readFileSync("./games/list.txt", "utf-8").split("\n").filter(l => l.length > 0 && l.charAt(0) !== "#")) {
 	const [ name, type, url ] = line.split(";", 3);
-	const path = "./static/games/previews/" + name + ".jpg";
+	const path = "./games/previews/" + name + ".jpg";
+
 	if (fs.existsSync(path)) {
 		continue;
 	}
@@ -70,7 +71,7 @@ for (const line of fs.readFileSync("./static/games/list.txt", "utf-8").split("\n
 		timeout: 10000,
 		waitUntil: "domcontentloaded"
 	});
-	await new Promise(resolve => setTimeout(resolve, 15000));
+	await new Promise(resolve => setTimeout(resolve, 30000));
 	await page.screenshot({
 		path: path,
 		type: "jpeg",
