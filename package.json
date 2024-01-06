@@ -22,8 +22,8 @@
 		"url": "git+https://github.com/whitespider-dev/whitespider-backend.git"
 	},
 	"dependencies": {
-		"puppeteer": "^21.5.2",
-		"socket.io": "^4.7.2"
+		"puppeteer": "^21.7.0",
+		"socket.io": "^4.7.3"
 	},
 	"devDependencies": {
 		"typescript": "^5.2.2"
