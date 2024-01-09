@@ -161,7 +161,8 @@ io.on("connection", (socket) => {
                 width: width,
                 height: height,
                 touch: touch,
-                landscape: landscape
+                landscape: landscape,
+                tor: tor
             },
             resourceLimits: {
                 maxOldGenerationSizeMb: 256,

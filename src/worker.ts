@@ -45,7 +45,7 @@ const chrome = await puppeteer.launch({
 	]
 });
 const context = tor ? await chrome.createIncognitoBrowserContext({
-	proxyServer: "",
+	proxyServer: "socks5://127.0.0.1:9050",
 	proxyBypassList: []
 }) : chrome.defaultBrowserContext();
 
