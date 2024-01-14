@@ -3,7 +3,7 @@ import puppeteer from "puppeteer";
 const port = worker.parentPort;
 if (worker.isMainThread)
     throw new Error("Invalid worker context");
-const { dataDir, width, height, touch, landscape, tor } = worker.workerData;
+const { dataDir, width, height, touch, landscape } = worker.workerData;
 const pages = [];
 let focused = -1;
 const chrome = await puppeteer.launch({
@@ -26,6 +26,7 @@ const chrome = await puppeteer.launch({
     args: [
         "--no-sandbox",
         "--no-first-run",
+        "--enable-gpu",
         "--disable-sync",
         "--disable-logging",
         "--disable-infobars",
@@ -40,10 +41,6 @@ const chrome = await puppeteer.launch({
         "--window-position=0,0"
     ]
 });
-const context = tor ? await chrome.createIncognitoBrowserContext({
-    proxyServer: "socks5://127.0.0.1:9050",
-    proxyBypassList: []
-}) : chrome.defaultBrowserContext();
 function updateURL() {
     const page = pages[focused];
     if (page != null) {
@@ -162,7 +159,7 @@ async function updatePageSettings(page) {
 }
 async function newTab() {
     try {
-        const page = await context.newPage();
+        const page = await chrome.newPage();
         await updatePageSettings(page);
         port.postMessage(["tabopen", ++focused]);
         port.postMessage(["url", page.url()]);
@@ -274,7 +271,7 @@ async function dispatchEvent(event) {
         catch (err) { }
     }
 }
-port.on("message", async (args) => {
+port.on("message", (args) => {
     switch (args.shift()) {
         case "newtab":
             newTab();
