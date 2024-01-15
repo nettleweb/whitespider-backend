@@ -8,6 +8,7 @@ import mime from "./mime.js";
 import stream from "stream";
 import worker from "worker_threads";
 import { Server } from "socket.io";
+import { AsyncLock } from "./AsyncLock.js";
 function randA(seed) { if ("number" != typeof seed || !Number.isSafeInteger(seed))
     throw new Error("Seed must be a safe integer."); return seed = (1664525 * seed + 1013904223) % Math.pow(2, 32); }
 function randB(seed) { if ("number" != typeof seed || !Number.isSafeInteger(seed))
@@ -80,8 +81,8 @@ async function handleGPTRequest(req, res) {
         return;
     }
     await lock;
-    lock = new Promise((r) => void (resolve = r));
-    response = res;
+    lock.lock();
+    lock.data = res;
     gpuWorker.postMessage(msg);
 }
 function handleRequest(req, res) {
@@ -179,9 +180,7 @@ dns.promises.setDefaultResultOrder("ipv4first");
 dns.promises.setServers(["1.1.1.1", "1.0.0.1"]);
 fs.mkdirSync("./local/chrome", { mode: 0o700, recursive: true });
 fs.mkdirSync("./local/data", { mode: 0o700, recursive: true });
-let lock = null;
-let resolve = null;
-let response = null;
+const lock = new AsyncLock();
 const gpuWorker = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.gpu.js")), {
     name: "GPU_Worker",
     workerData: {},
@@ -192,34 +191,24 @@ const gpuWorker = new worker.Worker(url.fileURLToPath(import.meta.resolve("./wor
         stackSizeMb: 8
     }
 });
-await new Promise((resolve, reject) => {
-    gpuWorker.once("message", (msg) => {
-        if (msg === "worker_ready")
-            resolve();
-        else
-            reject("Unexpected message received: " + msg);
-    });
-    gpuWorker.once("error", (err) => reject(err));
-    gpuWorker.once("exit", () => reject("GPU worker exited"));
-});
 gpuWorker.on("error", () => {
-    if (response != null) {
-        response.writeHead(500, "", { "Content-Type": "text/plain" });
-        response.end("500 Internal Server Error", "utf-8");
-    }
-    resolve?.apply(void 0, []);
-    resolve = lock = response = null;
+    const data = lock.data;
+    if (data == null)
+        throw new Error("Internal Logic Error");
+    data.writeHead(500, "", { "Content-Type": "text/plain" });
+    data.end("500 Internal Server Error", "utf-8");
+    lock.unlock();
 });
 gpuWorker.on("message", (msg) => {
-    if (resolve == null || response == null || typeof msg !== "string")
-        throw new Error("Internal logic error");
-    response.writeHead(200, "", {
+    const data = lock.data;
+    if (data == null)
+        throw new Error("Internal Logic Error");
+    data.writeHead(200, "", {
         "Content-Type": "application/octet-stream",
         "Access-Control-Allow-Origin": "*"
     });
-    response.end(Buffer.from(msg, "utf-8"), "utf-8");
-    resolve();
-    resolve = lock = response = null;
+    data.end(Buffer.from(msg, "utf-8"), "utf-8");
+    lock.unlock();
 });
 const httpServer = (() => {
     const key = Path.resolve("./local/key.txt");

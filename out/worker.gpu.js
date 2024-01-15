@@ -3,14 +3,6 @@ import gpt4all from "gpt4all";
 const port = worker.parentPort;
 if (worker.isMainThread)
     throw new Error("Invalid worker context");
-// ensure model is downloaded to the required directory
-(await gpt4all.loadModel("mistral-7b-openorca.Q4_0.gguf", {
-    type: "inference",
-    device: "gpu",
-    verbose: true,
-    modelPath: "./local/",
-    allowDownload: true
-})).dispose();
 port.on("message", async (msg) => {
     const model = await gpt4all.loadModel("mistral-7b-openorca.Q4_0.gguf", {
         type: "inference",
@@ -39,4 +31,3 @@ port.on("message", async (msg) => {
     model.dispose();
     port.postMessage(response.choices[0].message.content);
 });
-port.postMessage("worker_ready");
