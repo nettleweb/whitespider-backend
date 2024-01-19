@@ -1,4 +1,4 @@
-export interface AsyncLock<E = void, D = any> extends PromiseLike<void> {
+export interface AsyncLock<E = void, D = any> extends PromiseLike<E | undefined> {
 	data: D | undefined;
 	readonly locked: boolean;
 	readonly lock: () => void;
@@ -9,7 +9,7 @@ export interface AsyncLockConstructor {
 	readonly prototype: AsyncLock;
 }
 
-export const AsyncLock = class __proto__ {
+export const AsyncLock: AsyncLockConstructor = class __proto__ {
 	#v0: boolean = false;
 	#v1: any;
 	#g0: any;
@@ -38,3 +38,13 @@ export const AsyncLock = class __proto__ {
 		this.#v1 = void 0;
 	}
 }
+
+const __proto__ = AsyncLock.prototype;
+Object.setPrototypeOf(__proto__, null);
+Object.defineProperty(__proto__, Symbol.toStringTag, {
+	value: "AsyncLock",
+	writable: false,
+	enumerable: false,
+	configurable: false
+});
+Object.freeze(__proto__);

@@ -23,3 +23,12 @@ export const AsyncLock = class __proto__ {
         this.#v1 = void 0;
     }
 };
+const __proto__ = AsyncLock.prototype;
+Object.setPrototypeOf(__proto__, null);
+Object.defineProperty(__proto__, Symbol.toStringTag, {
+    value: "AsyncLock",
+    writable: false,
+    enumerable: false,
+    configurable: false
+});
+Object.freeze(__proto__);

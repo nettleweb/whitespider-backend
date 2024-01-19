@@ -196,9 +196,9 @@ function errorCB(err: Error) {
 
 
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
 // INIT
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
 
 dns.setDefaultResultOrder("ipv4first");
 dns.setServers(["1.1.1.1", "1.0.0.1"]);
@@ -208,8 +208,17 @@ dns.promises.setServers(["1.1.1.1", "1.0.0.1"]);
 fs.mkdirSync("./local/chrome", { mode: 0o700, recursive: true });
 fs.mkdirSync("./local/data", { mode: 0o700, recursive: true });
 
-const gpuLock: AsyncLock<void, http.ServerResponse> = new AsyncLock();
+for (const file of fs.readdirSync("./local/", { encoding: "utf-8" })) {
+	// delete temporary files from previous sessions
+	if (file.startsWith("data-"))
+		fs.rmSync("./local/" + file, { force: true, recursive: true });
+}
 
+//////////////////////////////////////////////////
+// GPU Worker
+//////////////////////////////////////////////////
+
+const gpuLock: AsyncLock<void, http.ServerResponse> = new AsyncLock();
 const gpuWorker = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.gpu.js")), {
 	name: "GPU_Worker",
 	workerData: {},
@@ -242,6 +251,10 @@ gpuWorker.on("message", (msg) => {
 	gpuLock.unlock();
 });
 
+//////////////////////////////////////////////////
+// HTTP Server
+//////////////////////////////////////////////////
+
 const httpServer = (() => {
 	const key = Path.resolve("./local/key.txt");
 	const cert = Path.resolve("./local/cert.txt");
@@ -268,10 +281,13 @@ const httpServer = (() => {
 		return server;
 	}
 })();
-
 httpServer.on("request", requestCB);
 httpServer.on("upgrade", upgradeCB);
 httpServer.on("error", errorCB);
+
+//////////////////////////////////////////////////
+// socket.io
+//////////////////////////////////////////////////
 
 const io = new Server(httpServer, {
 	path: "/untrihexium/",
@@ -298,50 +314,38 @@ const io = new Server(httpServer, {
 	httpCompression: true,
 	perMessageDeflate: true
 });
-
 io.on("connection", (socket) => {
-	let thread: worker.Worker | null = null;
-	let dataDir: string | null = null;
+	let endSession: (() => void) | undefined;
 
-	const endSession = () => {
-		if (thread != null) {
-			thread.removeAllListeners();
-			thread.terminate().then(() => {
-				try {
-					fs.rmSync(dataDir!, { force: true, recursive: true });
-				} catch (err) {
-				}
-				thread = null;
-				dataDir = null;
-			});
-		}
-	};
-
-	socket.onAny((...args) => {
-		thread?.postMessage(args);
+	socket.on("end_session", () => {
+		endSession?.apply(void 0, []);
 	});
-	socket.on("end_session", endSession);
 	socket.on("disconnect", () => {
 		socket.removeAllListeners();
 		socket.disconnect(true);
-		endSession();
+		endSession?.apply(void 0, []);
 	});
+	socket.on("request_new_session", (options) => {
+		if (endSession != null || typeof options !== "object") {
+			socket.disconnect(true);
+			return;
+		}
 
-	socket.on("request_new_session", async (options) => {
 		let { width, height, touch } = options;
-		if (thread != null || typeof width !== "number" || typeof height !== "number" || typeof touch !== "boolean") {
+		if (typeof width !== "number" || typeof height !== "number" || typeof touch !== "boolean") {
 			socket.disconnect(true);
 			return;
 		}
 
 		const landscape = width > height;
+		const dataDir = "./local/data-" + Date.now();
 		width = Math.max(Math.min(width, landscape ? 1280 : 720), 300);
 		height = Math.max(Math.min(height, landscape ? 720 : 1280), 300);
 
-		thread = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.unbl.js")), {
+		const thread = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.unbl.js")), {
 			name: "Handler",
 			workerData: {
-				dataDir: dataDir = "./local/data-" + Date.now(),
+				dataDir: dataDir,
 				width: width,
 				height: height,
 				touch: touch,
@@ -354,8 +358,19 @@ io.on("connection", (socket) => {
 				stackSizeMb: 8
 			}
 		});
-		thread.on("message", (args) => {
-			socket.emit.apply(socket, args);
-		});
+
+		socket.onAny((...args) => thread.postMessage(args));
+		thread.on("message", (args) => socket.emit.apply(socket, args));
+
+		endSession = () => {
+			thread.removeAllListeners();
+			thread.terminate().then(() => {
+				try {
+					fs.rmSync(dataDir, { force: true, recursive: true });
+				} catch (err) {
+				}
+				endSession = void 0;
+			});
+		};
 	});
 });

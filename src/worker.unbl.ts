@@ -59,22 +59,23 @@ function updateURL() {
 	}
 }
 
-function checkRewriteURL(url: string | URL): string {
-	switch ((url = new URL(url as string)).protocol) {
+function checkRewriteURL(url: URL): string {
+	switch (url.protocol) {
 		case "http:":
 		case "https:":
-		case "data:":
 			break;
+		case "data:":
+			return url.href;
 		default:
 			return "about:blank";
 	}
 
-	const { hostname } = url;
-	if (hostname === "localhost")
+	const host = url.hostname;
+	if (host === "localhost")
 		return "about:blank";
 
-	if (hostname.match(/^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$/)) {
-		const parts = hostname.split(".", 4); // direct ip access
+	if (host.match(/^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$/)) {
+		const parts = host.split(".", 4); // direct ip access
 		switch (parts[0]) {
 			case "0": // 0.0.0.0/8
 			case "127": // 127.0.0.0/8
@@ -90,28 +91,20 @@ function checkRewriteURL(url: string | URL): string {
 
 async function loadFavicon(page: puppeteer.Page): Promise<string | null> {
 	try {
-		const res = await fetch(await page.evaluate(`"use strict"; (() => {
-	const elems = document.querySelectorAll("link");
-	for (const elem of elems) {
-		for (const it of (elem.getAttribute("rel") || "").trim().split(" ")) {
-			if (it === "icon")
-				return new URL(elem.getAttribute("href") || "/favicon.ico", document.baseURI).href;
+		const res = await fetch(await page.evaluate('"use strict"; (() => {\n\tfor (const e of document.querySelectorAll("link")) {\n\t\tfor (const it of (e.getAttribute("rel") || "").trim().split(" ")) {\n\t\t\tif (it === "icon") {\n\t\t\t\treturn new URL((e.getAttribute("href") || "").trim() || "/favicon.ico", document.baseURI).href;\n\t\t\t}\n\t\t}\n\t}\n\treturn new URL("/favicon.ico", document.baseURI).href;\n})();') as string, {
+			method: "GET",
+			signal: AbortSignal.timeout(5000)
+		});
+		if (res.ok) {
+			const type = (res.headers.get("content-type") || "").split(";", 2)[0].trim();
+			if (type.startsWith("image/")) {
+				return "data:" + type + ";base64," + Buffer.from(await res.arrayBuffer()).toString("base64");
+			}
 		}
-	}
-	return new URL("/favicon.ico", document.baseURI).href;
-})();`) as string);
-
-		if (!res.ok)
-			return null;
-
-		const type = (res.headers.get("content-type") || "").split(";", 2)[0].trim();
-		if (!type.startsWith("image/"))
-			return null;
-
-		return "data:" + type + ";base64," + Buffer.from(await res.arrayBuffer()).toString("base64");
 	} catch (err) {
-		return null;
 	}
+
+	return null;
 }
 
 async function updatePageSettings(page: puppeteer.Page) {
@@ -330,16 +323,23 @@ const loop = async () => {
 	const page = pages[focused];
 	if (page != null) {
 		try {
-			port.postMessage(["frame", await page.screenshot({
-				type: "jpeg",
-				quality: 70,
-				encoding: "base64",
-				fullPage: false,
-				fromSurface: true,
-				omitBackground: true,
-				optimizeForSpeed: true,
-				captureBeyondViewport: false
-			})]);
+			let buffer: string = "";
+
+			const state = await page.evaluate("document.readyState");
+			if (state !== "loading") {
+				buffer = await page.screenshot({
+					type: "jpeg",
+					quality: 70,
+					encoding: "base64",
+					fullPage: false,
+					fromSurface: true,
+					omitBackground: true,
+					optimizeForSpeed: true,
+					captureBeyondViewport: false
+				})
+			}
+
+			port.postMessage(["frame", buffer]);
 		} catch (err) { }
 	}
 	setTimeout(loop, 100);
