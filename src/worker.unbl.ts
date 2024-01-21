@@ -323,11 +323,9 @@ const loop = async () => {
 	const page = pages[focused];
 	if (page != null) {
 		try {
-			let buffer: string = "";
-
 			const state = await page.evaluate("document.readyState");
 			if (state !== "loading") {
-				buffer = await page.screenshot({
+				port.postMessage(["frame", await page.screenshot({
 					type: "jpeg",
 					quality: 70,
 					encoding: "base64",
@@ -336,10 +334,8 @@ const loop = async () => {
 					omitBackground: true,
 					optimizeForSpeed: true,
 					captureBeyondViewport: false
-				})
-			}
-
-			port.postMessage(["frame", buffer]);
+				})]);
+			} else port.postMessage(["frame", ""]);
 		} catch (err) { }
 	}
 	setTimeout(loop, 100);

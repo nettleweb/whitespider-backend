@@ -301,21 +301,21 @@ const loop = async () => {
     const page = pages[focused];
     if (page != null) {
         try {
-            let buffer = "";
             const state = await page.evaluate("document.readyState");
             if (state !== "loading") {
-                buffer = await page.screenshot({
-                    type: "jpeg",
-                    quality: 70,
-                    encoding: "base64",
-                    fullPage: false,
-                    fromSurface: true,
-                    omitBackground: true,
-                    optimizeForSpeed: true,
-                    captureBeyondViewport: false
-                });
+                port.postMessage(["frame", await page.screenshot({
+                        type: "jpeg",
+                        quality: 70,
+                        encoding: "base64",
+                        fullPage: false,
+                        fromSurface: true,
+                        omitBackground: true,
+                        optimizeForSpeed: true,
+                        captureBeyondViewport: false
+                    })]);
             }
-            port.postMessage(["frame", buffer]);
+            else
+                port.postMessage(["frame", ""]);
         }
         catch (err) { }
     }
