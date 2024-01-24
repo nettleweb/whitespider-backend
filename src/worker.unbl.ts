@@ -1,4 +1,6 @@
+import fs from "fs";
 import worker from "worker_threads";
+import process from "process";
 import puppeteer from "puppeteer";
 
 const port = worker.parentPort!;
@@ -287,6 +289,13 @@ async function dispatchEvent(event: Event) {
 	}
 }
 
+{
+	const _env = process.env as any;
+	Object.setPrototypeOf(_env, null);
+	for (const k of Object.getOwnPropertyNames(_env))
+		delete _env[k];
+}
+
 port.on("message", (args: any[]) => {
 	switch (args.shift()) {
 		case "newtab":
@@ -313,6 +322,20 @@ port.on("message", (args: any[]) => {
 		case "event":
 			dispatchEvent(args.shift());
 			break;
+		case "end_session":
+			(async () => {
+				await chrome.close();
+				for (let _ = 0; _ < 100 && fs.existsSync(dataDir); _++) {
+					try {
+						fs.rmSync(dataDir, { force: true, recursive: true });
+						break;
+					} catch (err) { }
+
+					await new Promise<void>(r => setTimeout(r, 20));
+				}
+				process.exit(0);
+			})();
+			break;
 		default:
 			break;
 	}
@@ -327,7 +350,7 @@ const loop = async () => {
 			if (state !== "loading") {
 				port.postMessage(["frame", await page.screenshot({
 					type: "jpeg",
-					quality: 70,
+					quality: 50,
 					encoding: "base64",
 					fullPage: false,
 					fromSurface: true,
@@ -338,6 +361,6 @@ const loop = async () => {
 			} else port.postMessage(["frame", ""]);
 		} catch (err) { }
 	}
-	setTimeout(loop, 100);
+	setTimeout(loop, 50);
 };
 await loop();

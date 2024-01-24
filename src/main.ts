@@ -4,7 +4,6 @@ import url from "url";
 import http from "http";
 import https from "https";
 import Path from "path";
-import mime from "./mime.js";
 import stream from "stream";
 import worker from "worker_threads";
 import { Server } from "socket.io";
@@ -35,22 +34,6 @@ function validateKey(headers: Record<string, any>) {
 		randB(int0) === int1 &&
 		randA(seed) === int2 &&
 		randA(int2) === int3;
-}
-
-function getFilePath(pathname: string): string | null {
-	const path = Path.resolve("./static/" + pathname);
-	if (fs.existsSync(path)) {
-		if (fs.lstatSync(path, { bigint: true, throwIfNoEntry: true }).isDirectory()) {
-			for (const f of ["index.html", "index.xht", "index.htm", "index.xhtml", "index.xml", "index.svg"]) {
-				const p = Path.join(path, f);
-				if (fs.existsSync(p))
-					return p;
-			}
-			return null;
-		}
-		return path;
-	}
-	return null;
 }
 
 function getStreamBody(str: stream.Readable): Promise<Buffer> {
@@ -152,26 +135,11 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
 			return;
 	}
 
-	const url = new URL(rawPath, "https://" + host);
-	const path = getFilePath(url.pathname);
-
-	if (path != null) {
-		res.writeHead(200, "", {
-			"Content-Type": mime[Path.extname(path)] || "application/octet-stream",
-			"Cross-Origin-Embedder-Policy": "require-corp",
-			"Cross-Origin-Opener-Policy": "same-origin",
-			"Referrer-Policy": "no-referrer",
-			"X-Content-Type-Options": "nosniff"
-		});
-
-		if (method === "HEAD")
-			res.end();
-		else
-			res.end(fs.readFileSync(path), "utf-8");
-	} else {
-		res.writeHead(404, "", { "Content-Type": "text/plain" });
-		res.end("404 Not Found", "utf-8");
-	}
+	res.writeHead(301, "", {
+		"Content-Type": "text/plain",
+		"Location": "https://whitespider.dev/"
+	});
+	res.end("301 Moved Permanently", "utf-8");
 }
 
 function requestCB(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -263,7 +231,8 @@ const httpServer = (() => {
 		const server = https.createServer({
 			key: fs.readFileSync(key, "utf-8"),
 			cert: fs.readFileSync(cert, "utf-8"),
-			maxHeaderSize: 8192
+			maxHeaderSize: 8192,
+			requestTimeout: 15000
 		}, void 0);
 		server.listen(443, "0.0.0.0", 255, () => {
 			const address = server.address() || "unknown address";
@@ -272,7 +241,8 @@ const httpServer = (() => {
 		return server;
 	} else {
 		const server = http.createServer({
-			maxHeaderSize: 8192
+			maxHeaderSize: 8192,
+			requestTimeout: 15000
 		}, void 0);
 		server.listen(80, "0.0.0.0", 255, () => {
 			const address = server.address() || "unknown address";
@@ -299,7 +269,7 @@ const io = new Server(httpServer, {
 			"https://whitespider.eu.org"
 		],
 		maxAge: 7200,
-		methods: ["GET", "HEAD", "POST"],
+		methods: ["GET", "HEAD"],
 		credentials: false,
 		allowedHeaders: [],
 		exposedHeaders: []
@@ -308,11 +278,10 @@ const io = new Server(httpServer, {
 	pingInterval: 15000,
 	connectTimeout: 20000,
 	upgradeTimeout: 5000,
+	httpCompression: true,
 	destroyUpgrade: true,
 	destroyUpgradeTimeout: 1000,
-	maxHttpBufferSize: 1024,
-	httpCompression: true,
-	perMessageDeflate: true
+	maxHttpBufferSize: 1024
 });
 io.on("connection", (socket) => {
 	let endSession: (() => void) | undefined;
@@ -361,16 +330,13 @@ io.on("connection", (socket) => {
 
 		socket.onAny((...args) => thread.postMessage(args));
 		thread.on("message", (args) => socket.emit.apply(socket, args));
-
-		endSession = () => {
+		thread.on("exit", (code) => {
 			thread.removeAllListeners();
-			thread.terminate().then(() => {
-				try {
-					fs.rmSync(dataDir, { force: true, recursive: true });
-				} catch (err) {
-				}
-				endSession = void 0;
-			});
-		};
+			endSession = void 0;
+			if (code !== 0)
+				socket.disconnect(true);
+		});
+
+		endSession = () => thread.postMessage(["end_session"]);
 	});
 });
