@@ -1,4 +1,3 @@
-import fs from "fs";
 import worker from "worker_threads";
 import process from "process";
 import puppeteer from "puppeteer";
@@ -7,7 +6,13 @@ const port = worker.parentPort!;
 if (worker.isMainThread)
 	throw new Error("Invalid worker context");
 
-const { dataDir, width, height, touch, landscape } = worker.workerData;
+const data: {
+	readonly touch: boolean;
+	readonly width: number;
+	readonly height: number;
+	readonly dataDir: string;
+	readonly landscape: boolean;
+} = Object.freeze(Object.setPrototypeOf(worker.workerData, null));
 const pages: (puppeteer.Page | undefined)[] = [];
 
 let focused: number = -1;
@@ -15,12 +20,16 @@ let focused: number = -1;
 const chrome = await puppeteer.launch({
 	pipe: true,
 	dumpio: true,
-	timeout: 10000,
-	product: "chrome",
 	channel: "chrome",
+	product: "chrome",
+	timeout: 10000,
 	headless: true,
-	userDataDir: dataDir,
+	userDataDir: data.dataDir,
+	handleSIGHUP: false,
+	handleSIGINT: false,
+	handleSIGTERM: false,
 	executablePath: "./local/chrome/chrome",
+	protocolTimeout: 5000,
 	defaultViewport: {
 		width: 1280,
 		height: 720,
@@ -118,7 +127,7 @@ async function updatePageSettings(page: puppeteer.Page) {
 		longitude: 0,
 		accuracy: 0
 	});
-	await page.setUserAgent("Mozilla/5.0 ( ; ; rv:121.0) Gecko/20100101 Firefox/121.0", {
+	await page.setUserAgent("Mozilla/5.0 (X11; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0", {
 		architecture: "",
 		bitness: "",
 		brands: [],
@@ -131,11 +140,11 @@ async function updatePageSettings(page: puppeteer.Page) {
 		wow64: false
 	});
 	await page.setViewport({
-		width: width,
-		height: height,
+		width: data.width,
+		height: data.height,
 		isMobile: false,
-		hasTouch: touch,
-		isLandscape: landscape,
+		hasTouch: data.touch,
+		isLandscape: data.landscape,
 		deviceScaleFactor: 1
 	});
 
@@ -289,12 +298,14 @@ async function dispatchEvent(event: Event) {
 	}
 }
 
-{
-	const _env = process.env as any;
-	Object.setPrototypeOf(_env, null);
-	for (const k of Object.getOwnPropertyNames(_env))
-		delete _env[k];
+async function exitListener() {
+	await chrome.close();
+	process.exit(0);
 }
+
+process.on("SIGHUP", exitListener);
+process.on("SIGINT", exitListener);
+process.on("SIGTERM", exitListener);
 
 port.on("message", (args: any[]) => {
 	switch (args.shift()) {
@@ -322,25 +333,10 @@ port.on("message", (args: any[]) => {
 		case "event":
 			dispatchEvent(args.shift());
 			break;
-		case "end_session":
-			(async () => {
-				await chrome.close();
-				for (let _ = 0; _ < 100 && fs.existsSync(dataDir); _++) {
-					try {
-						fs.rmSync(dataDir, { force: true, recursive: true });
-						break;
-					} catch (err) { }
-
-					await new Promise<void>(r => setTimeout(r, 20));
-				}
-				process.exit(0);
-			})();
-			break;
 		default:
 			break;
 	}
 });
-port.postMessage(["session_ready", { width, height }]);
 
 const loop = async () => {
 	const page = pages[focused];
@@ -351,16 +347,22 @@ const loop = async () => {
 				port.postMessage(["frame", await page.screenshot({
 					type: "jpeg",
 					quality: 50,
-					encoding: "base64",
+					encoding: "binary",
 					fullPage: false,
 					fromSurface: true,
 					omitBackground: true,
 					optimizeForSpeed: true,
 					captureBeyondViewport: false
 				})]);
-			} else port.postMessage(["frame", ""]);
+			}
 		} catch (err) { }
 	}
-	setTimeout(loop, 50);
+	setTimeout(loop, 10);
 };
+
+port.postMessage(["session_ready", {
+	width: data.width,
+	height: data.height
+}]);
+
 await loop();

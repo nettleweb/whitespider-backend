@@ -105,25 +105,21 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
 		case "HEAD":
 			break;
 		case "OPTIONS":
-			switch (headers.origin) {
-				case "http://localhost:8000":
-				case "https://whitespider.gq":
-				case "https://whitespider.dev":
-				case "https://whitespider.eu.org":
-					res.writeHead(200, "", {
-						"Allow": "GET, HEAD, OPTIONS",
-						"Access-Control-Allow-Origin": "*",
-						"Access-Control-Allow-Methods": "*",
-						"Access-Control-Allow-Headers": "*",
-						"Access-Control-Max-Age": "7200"
-					});
-					break;
-				default:
-					res.writeHead(200, "", {
-						"Allow": "GET, HEAD, OPTIONS"
-					});
-					break;
+			if (!headers.origin) {
+				res.writeHead(200, "", {
+					"Allow": "GET, HEAD, OPTIONS"
+				});
+				res.end();
+				return;
 			}
+
+			res.writeHead(200, "", {
+				"Allow": "GET, HEAD, OPTIONS",
+				"Access-Control-Allow-Origin": "*",
+				"Access-Control-Allow-Methods": "*",
+				"Access-Control-Allow-Headers": "*",
+				"Access-Control-Max-Age": "7200"
+			});
 			res.end();
 			return;
 		default:
@@ -154,7 +150,7 @@ function requestCB(req: http.IncomingMessage, res: http.ServerResponse) {
 
 function upgradeCB(req: http.IncomingMessage, socket: import("stream").Duplex, head: Buffer) {
 	const path = req.url;
-	if (path == null || !path.startsWith("/untrihexium/"))
+	if (path == null || !path.startsWith("/untrihexium_v2/"))
 		socket.end("Forbidden", "utf-8");
 }
 
@@ -260,14 +256,9 @@ httpServer.on("error", errorCB);
 //////////////////////////////////////////////////
 
 const io = new Server(httpServer, {
-	path: "/untrihexium/",
+	path: "/untrihexium_v2/",
 	cors: {
-		origin: [
-			"http://localhost:8000",
-			"https://whitespider.gq",
-			"https://whitespider.dev",
-			"https://whitespider.eu.org"
-		],
+		origin: true,
 		maxAge: 7200,
 		methods: ["GET", "HEAD"],
 		credentials: false,
@@ -279,12 +270,15 @@ const io = new Server(httpServer, {
 	connectTimeout: 20000,
 	upgradeTimeout: 5000,
 	httpCompression: true,
+	maxHttpBufferSize: 1024,
 	destroyUpgrade: true,
 	destroyUpgradeTimeout: 1000,
-	maxHttpBufferSize: 1024
+	cleanupEmptyChildNamespaces: true
 });
 io.on("connection", (socket) => {
 	let endSession: (() => void) | undefined;
+
+	socket.conn.protocol
 
 	socket.on("end_session", () => {
 		endSession?.apply(void 0, []);
@@ -312,12 +306,16 @@ io.on("connection", (socket) => {
 		height = Math.max(Math.min(height, landscape ? 720 : 1280), 300);
 
 		const thread = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.unbl.js")), {
+			env: worker.SHARE_ENV,
 			name: "Handler",
+			stdin: false,
+			stdout: false,
+			stderr: false,
 			workerData: {
-				dataDir: dataDir,
+				touch: touch,
 				width: width,
 				height: height,
-				touch: touch,
+				dataDir: dataDir,
 				landscape: landscape
 			},
 			resourceLimits: {
@@ -330,13 +328,15 @@ io.on("connection", (socket) => {
 
 		socket.onAny((...args) => thread.postMessage(args));
 		thread.on("message", (args) => socket.emit.apply(socket, args));
-		thread.on("exit", (code) => {
-			thread.removeAllListeners();
-			endSession = void 0;
-			if (code !== 0)
-				socket.disconnect(true);
-		});
 
-		endSession = () => thread.postMessage(["end_session"]);
+		endSession = () => {
+			thread.removeAllListeners();
+			thread.terminate().then(() => {
+				try {
+					fs.rmSync(dataDir, { force: true, recursive: true });
+				} catch (err) { }
+				endSession = void 0;
+			});
+		};
 	});
 });
