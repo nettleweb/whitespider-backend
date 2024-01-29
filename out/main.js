@@ -155,7 +155,11 @@ for (const file of fs.readdirSync("./local/", { encoding: "utf-8" })) {
 //////////////////////////////////////////////////
 const gpuLock = new AsyncLock();
 const gpuWorker = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.gpu.js")), {
+    env: worker.SHARE_ENV,
     name: "GPU_Worker",
+    stdin: false,
+    stdout: false,
+    stderr: false,
     workerData: {},
     resourceLimits: {
         maxOldGenerationSizeMb: 256,
@@ -242,7 +246,6 @@ const io = new Server(httpServer, {
 });
 io.on("connection", (socket) => {
     let endSession;
-    socket.conn.protocol;
     socket.on("end_session", () => {
         endSession?.apply(void 0, []);
     });
@@ -287,9 +290,19 @@ io.on("connection", (socket) => {
         });
         socket.onAny((...args) => thread.postMessage(args));
         thread.on("message", (args) => socket.emit.apply(socket, args));
+        thread.on("error", (err) => {
+            console.error("Worker Error: ", err);
+            thread.removeAllListeners();
+            try {
+                fs.rmSync(dataDir, { force: true, recursive: true });
+            }
+            catch (err) { }
+            endSession = void 0;
+        });
         endSession = () => {
             thread.removeAllListeners();
-            thread.terminate().then(() => {
+            thread.postMessage(["stop"]);
+            thread.once("exit", () => {
                 try {
                     fs.rmSync(dataDir, { force: true, recursive: true });
                 }

@@ -1,6 +1,7 @@
 import worker from "worker_threads";
 import process from "process";
 import puppeteer from "puppeteer";
+import stubImage from "./stubImage.js";
 
 const port = worker.parentPort!;
 if (worker.isMainThread)
@@ -16,6 +17,21 @@ const data: {
 const pages: (puppeteer.Page | undefined)[] = [];
 
 let focused: number = -1;
+
+{
+	const env = Object.setPrototypeOf(process.env, null);
+	const home = env["HOME"];
+	const path = env["PATH"];
+
+	for (const k of Object.getOwnPropertyNames(env))
+		delete env[k];
+
+	env["HOME"] = home;
+	env["PATH"] = path;
+	env["LANG"] = "C";
+	env["LANGUAGE"] = "C";
+	env["LC_ALL"] = "C";
+}
 
 const chrome = await puppeteer.launch({
 	pipe: true,
@@ -148,7 +164,7 @@ async function updatePageSettings(page: puppeteer.Page) {
 		deviceScaleFactor: 1
 	});
 
-	page.setDefaultTimeout(2000);
+	page.setDefaultTimeout(5000);
 	page.setDefaultNavigationTimeout(10000);
 
 	page.on("load", async () => {
@@ -306,6 +322,7 @@ async function exitListener() {
 process.on("SIGHUP", exitListener);
 process.on("SIGINT", exitListener);
 process.on("SIGTERM", exitListener);
+process.on("SIGQUIT", exitListener);
 
 port.on("message", (args: any[]) => {
 	switch (args.shift()) {
@@ -333,6 +350,9 @@ port.on("message", (args: any[]) => {
 		case "event":
 			dispatchEvent(args.shift());
 			break;
+		case "stop":
+			exitListener();
+			break;
 		default:
 			break;
 	}
@@ -341,23 +361,26 @@ port.on("message", (args: any[]) => {
 const loop = async () => {
 	const page = pages[focused];
 	if (page != null) {
+		let buffer: ArrayBuffer | undefined;
+
 		try {
-			const state = await page.evaluate("document.readyState");
-			if (state !== "loading") {
-				port.postMessage(["frame", await page.screenshot({
+			if (await page.evaluate("document.readyState") !== "loading") {
+				buffer = (await page.screenshot({
 					type: "jpeg",
-					quality: 50,
+					quality: 80,
 					encoding: "binary",
 					fullPage: false,
-					fromSurface: true,
+					fromSurface: false,
 					omitBackground: true,
 					optimizeForSpeed: true,
 					captureBeyondViewport: false
-				})]);
+				})).buffer;
 			}
 		} catch (err) { }
+
+		port.postMessage(["frame", buffer || stubImage]);
 	}
-	setTimeout(loop, 10);
+	setTimeout(loop, 100);
 };
 
 port.postMessage(["session_ready", {

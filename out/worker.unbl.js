@@ -1,12 +1,25 @@
 import worker from "worker_threads";
 import process from "process";
 import puppeteer from "puppeteer";
+import stubImage from "./stubImage.js";
 const port = worker.parentPort;
 if (worker.isMainThread)
     throw new Error("Invalid worker context");
 const data = Object.freeze(Object.setPrototypeOf(worker.workerData, null));
 const pages = [];
 let focused = -1;
+{
+    const env = Object.setPrototypeOf(process.env, null);
+    const home = env["HOME"];
+    const path = env["PATH"];
+    for (const k of Object.getOwnPropertyNames(env))
+        delete env[k];
+    env["HOME"] = home;
+    env["PATH"] = path;
+    env["LANG"] = "C";
+    env["LANGUAGE"] = "C";
+    env["LC_ALL"] = "C";
+}
 const chrome = await puppeteer.launch({
     pipe: true,
     dumpio: true,
@@ -124,7 +137,7 @@ async function updatePageSettings(page) {
         isLandscape: data.landscape,
         deviceScaleFactor: 1
     });
-    page.setDefaultTimeout(2000);
+    page.setDefaultTimeout(5000);
     page.setDefaultNavigationTimeout(10000);
     page.on("load", async () => {
         const index = pages.indexOf(page);
@@ -278,6 +291,7 @@ async function exitListener() {
 process.on("SIGHUP", exitListener);
 process.on("SIGINT", exitListener);
 process.on("SIGTERM", exitListener);
+process.on("SIGQUIT", exitListener);
 port.on("message", (args) => {
     switch (args.shift()) {
         case "newtab":
@@ -304,6 +318,9 @@ port.on("message", (args) => {
         case "event":
             dispatchEvent(args.shift());
             break;
+        case "stop":
+            exitListener();
+            break;
         default:
             break;
     }
@@ -311,24 +328,25 @@ port.on("message", (args) => {
 const loop = async () => {
     const page = pages[focused];
     if (page != null) {
+        let buffer;
         try {
-            const state = await page.evaluate("document.readyState");
-            if (state !== "loading") {
-                port.postMessage(["frame", await page.screenshot({
-                        type: "jpeg",
-                        quality: 50,
-                        encoding: "binary",
-                        fullPage: false,
-                        fromSurface: true,
-                        omitBackground: true,
-                        optimizeForSpeed: true,
-                        captureBeyondViewport: false
-                    })]);
+            if (await page.evaluate("document.readyState") !== "loading") {
+                buffer = (await page.screenshot({
+                    type: "jpeg",
+                    quality: 80,
+                    encoding: "binary",
+                    fullPage: false,
+                    fromSurface: false,
+                    omitBackground: true,
+                    optimizeForSpeed: true,
+                    captureBeyondViewport: false
+                })).buffer;
             }
         }
         catch (err) { }
+        port.postMessage(["frame", buffer || stubImage]);
     }
-    setTimeout(loop, 10);
+    setTimeout(loop, 100);
 };
 port.postMessage(["session_ready", {
         width: data.width,
