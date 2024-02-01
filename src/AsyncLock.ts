@@ -1,21 +1,18 @@
-export interface AsyncLock<E = void, D = any> extends PromiseLike<E | undefined> {
-	data: D | undefined;
+export interface AsyncLock extends PromiseLike<void> {
 	readonly locked: boolean;
 	readonly lock: () => void;
-	readonly unlock: (v: E) => void;
+	readonly unlock: () => void;
 }
+
 export interface AsyncLockConstructor {
-	new <E = void, D = any>(): AsyncLock<E, D>;
+	new(): AsyncLock;
 	readonly prototype: AsyncLock;
 }
 
 export const AsyncLock: AsyncLockConstructor = class __proto__ {
 	#v0: boolean = false;
-	#v1: any;
-	#g0: any;
+	#g0: Function | undefined;
 
-	get data(): any { return this.#v1 || void 0; }
-	set data(v: any) { this.#v1 = v; }
 	get locked(): any { return this.#v0; }
 
 	then(p0: any): this {
@@ -32,10 +29,9 @@ export const AsyncLock: AsyncLockConstructor = class __proto__ {
 		this.#v0 = true;
 	}
 
-	unlock(v: any): void {
+	unlock(): void {
 		this.#v0 = false;
-		this.#g0?.apply(v);
-		this.#v1 = void 0;
+		this.#g0?.apply(void 0, []);
 	}
 }
 

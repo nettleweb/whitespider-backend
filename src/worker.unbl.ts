@@ -18,21 +18,6 @@ const pages: (puppeteer.Page | undefined)[] = [];
 
 let focused: number = -1;
 
-{
-	const env = Object.setPrototypeOf(process.env, null);
-	const home = env["HOME"];
-	const path = env["PATH"];
-
-	for (const k of Object.getOwnPropertyNames(env))
-		delete env[k];
-
-	env["HOME"] = home;
-	env["PATH"] = path;
-	env["LANG"] = "C";
-	env["LANGUAGE"] = "C";
-	env["LC_ALL"] = "C";
-}
-
 const chrome = await puppeteer.launch({
 	pipe: true,
 	dumpio: true,
@@ -79,13 +64,6 @@ type WheelEvent = { readonly type: "wheel"; readonly deltaX: number; readonly de
 type KeyboardEvent = { readonly type: "keydown" | "keyup"; readonly key: puppeteer.KeyInput; };
 type Event = MouseEvent | TouchEvent | WheelEvent | KeyboardEvent;
 
-function updateURL() {
-	const page = pages[focused];
-	if (page != null) {
-		port.postMessage(["url", page.url()]);
-	}
-}
-
 function checkRewriteURL(url: URL): string {
 	switch (url.protocol) {
 		case "http:":
@@ -114,24 +92,6 @@ function checkRewriteURL(url: URL): string {
 	}
 
 	return url.href;
-}
-
-async function loadFavicon(page: puppeteer.Page): Promise<string | null> {
-	try {
-		const res = await fetch(await page.evaluate('"use strict"; (() => {\n\tfor (const e of document.querySelectorAll("link")) {\n\t\tfor (const it of (e.getAttribute("rel") || "").trim().split(" ")) {\n\t\t\tif (it === "icon") {\n\t\t\t\treturn new URL((e.getAttribute("href") || "").trim() || "/favicon.ico", document.baseURI).href;\n\t\t\t}\n\t\t}\n\t}\n\treturn new URL("/favicon.ico", document.baseURI).href;\n})();') as string, {
-			method: "GET",
-			signal: AbortSignal.timeout(5000)
-		});
-		if (res.ok) {
-			const type = (res.headers.get("content-type") || "").split(";", 2)[0].trim();
-			if (type.startsWith("image/")) {
-				return "data:" + type + ";base64," + Buffer.from(await res.arrayBuffer()).toString("base64");
-			}
-		}
-	} catch (err) {
-	}
-
-	return null;
 }
 
 async function updatePageSettings(page: puppeteer.Page) {
@@ -170,23 +130,45 @@ async function updatePageSettings(page: puppeteer.Page) {
 	page.on("load", async () => {
 		const index = pages.indexOf(page);
 		if (index >= 0) {
+			let title, favicon;
+
+			try {
+				title = await page.title();
+			} catch (err) { }
+
+			try {
+				const res = await fetch(await page.evaluate('"use strict"; (() => {\n\tfor (const e of document.querySelectorAll("link")) {\n\t\tfor (const it of (e.getAttribute("rel") || "").trim().split(" ")) {\n\t\t\tif (it === "icon") {\n\t\t\t\treturn new URL((e.getAttribute("href") || "").trim() || "/favicon.ico", document.baseURI).href;\n\t\t\t}\n\t\t}\n\t}\n\treturn new URL("/favicon.ico", document.baseURI).href;\n})();') as string, {
+					method: "GET",
+					signal: AbortSignal.timeout(5000)
+				});
+				if (res.ok) {
+					const type = (res.headers.get("content-type") || "").split(";", 2)[0].trim();
+					if (type.startsWith("image/")) {
+						favicon = "data:" + type + ";base64," + Buffer.from(await res.arrayBuffer()).toString("base64");
+					}
+				}
+			} catch (err) { }
+
 			port.postMessage(["tabinfo", {
 				id: index,
-				title: await page.title(),
-				favicon: await loadFavicon(page),
+				title: title || "",
+				favicon: favicon,
 			}]);
-			updateURL();
+			port.postMessage(["url", page.url()]);
 		}
 	});
 	page.on("close", () => {
 		page.removeAllListeners();
+
 		const index = pages.indexOf(page);
 		if (index >= 0) {
 			pages.splice(index, 1);
-			if (focused >= pages.length)
-				focused--;
 			port.postMessage(["tabclose", index]);
-			updateURL();
+			if (focused >= pages.length) {
+				const page = pages[--focused];
+				if (page != null)
+					port.postMessage(["url", page.url()]);
+			}
 		}
 	});
 	page.on("popup", (page) => {

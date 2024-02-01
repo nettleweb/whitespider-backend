@@ -77,10 +77,49 @@ async function handleGPTRequest(req: http.IncomingMessage, res: http.ServerRespo
 		return;
 	}
 
-	await gpuLock;
-	gpuLock.lock();
-	gpuLock.data = res;
-	gpuWorker.postMessage(msg);
+	await gpuLock; gpuLock.lock();
+	res.writeHead(200, "", {
+		"Content-Type": "application/octet-stream",
+		"Access-Control-Allow-Origin": "*"
+	});
+
+	const thread = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.gpu.js")), {
+		name: "GPU_Worker",
+		stdin: false,
+		stdout: false,
+		stderr: false,
+		workerData: msg,
+		resourceLimits: {
+			maxOldGenerationSizeMb: 256,
+			maxYoungGenerationSizeMb: 32,
+			codeRangeSizeMb: 64,
+			stackSizeMb: 8
+		}
+	});
+
+	thread.on("message", (data) => {
+		res.write(data, "utf-8");
+	});
+
+	try {
+		await new Promise<void>((resolve, reject) => {
+			thread.once("exit", (code) => {
+				if (code === 0)
+					resolve();
+				else
+					reject("Process exited with non-zero code.");
+			});
+			thread.once("error", (err) => reject(err));
+		});
+		res.end();
+	} catch (err) {
+		console.error(err);
+		res.end("\n\nError: Generation aborted due to error on server side.\n", "utf-8");
+	}
+
+	await thread.terminate(); // ensure worker is dead
+	thread.removeAllListeners();
+	gpuLock.unlock();
 }
 
 function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -182,42 +221,7 @@ for (const file of fs.readdirSync("./local/", { encoding: "utf-8" })) {
 // GPU Worker
 //////////////////////////////////////////////////
 
-const gpuLock: AsyncLock<void, http.ServerResponse> = new AsyncLock();
-const gpuWorker = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.gpu.js")), {
-	env: worker.SHARE_ENV,
-	name: "GPU_Worker",
-	stdin: false,
-	stdout: false,
-	stderr: false,
-	workerData: {},
-	resourceLimits: {
-		maxOldGenerationSizeMb: 256,
-		maxYoungGenerationSizeMb: 32,
-		codeRangeSizeMb: 64,
-		stackSizeMb: 8
-	}
-});
-gpuWorker.on("error", () => {
-	const data = gpuLock.data;
-	if (data == null)
-		throw new Error("Internal Logic Error");
-
-	data.writeHead(500, "", { "Content-Type": "text/plain" });
-	data.end("500 Internal Server Error", "utf-8");
-	gpuLock.unlock();
-});
-gpuWorker.on("message", (msg) => {
-	const data = gpuLock.data;
-	if (data == null)
-		throw new Error("Internal Logic Error");
-
-	data.writeHead(200, "", {
-		"Content-Type": "application/octet-stream",
-		"Access-Control-Allow-Origin": "*"
-	});
-	data.end(Buffer.from(msg, "utf-8"), "utf-8");
-	gpuLock.unlock();
-});
+const gpuLock: AsyncLock = new AsyncLock();
 
 //////////////////////////////////////////////////
 // HTTP Server
@@ -308,7 +312,6 @@ io.on("connection", (socket) => {
 		height = Math.max(Math.min(height, landscape ? 720 : 1280), 300);
 
 		const thread = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.unbl.js")), {
-			env: worker.SHARE_ENV,
 			name: "Handler",
 			stdin: false,
 			stdout: false,
@@ -331,7 +334,7 @@ io.on("connection", (socket) => {
 		socket.onAny((...args) => thread.postMessage(args));
 		thread.on("message", (args) => socket.emit.apply(socket, args));
 		thread.on("error", (err) => {
-			console.error("Worker Error: ", err)
+			console.error("Worker Error: ", err);
 			thread.removeAllListeners();
 			try {
 				fs.rmSync(dataDir, { force: true, recursive: true });

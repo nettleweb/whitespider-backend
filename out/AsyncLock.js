@@ -1,9 +1,6 @@
 export const AsyncLock = class __proto__ {
     #v0 = false;
-    #v1;
     #g0;
-    get data() { return this.#v1 || void 0; }
-    set data(v) { this.#v1 = v; }
     get locked() { return this.#v0; }
     then(p0) {
         if (typeof p0 === "function") {
@@ -17,10 +14,9 @@ export const AsyncLock = class __proto__ {
     lock() {
         this.#v0 = true;
     }
-    unlock(v) {
+    unlock() {
         this.#v0 = false;
-        this.#g0?.apply(v);
-        this.#v1 = void 0;
+        this.#g0?.apply(void 0, []);
     }
 };
 const __proto__ = AsyncLock.prototype;
