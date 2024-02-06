@@ -21,7 +21,7 @@ const response = await gpt4all.createCompletion(model, worker.workerData, {
 	logitsSize: 0,
 	tokensSize: 0,
 	nPredict: 2048,
-	nBatch: 128,
+	nBatch: 32,
 	nPast: 0,
 	nCtx: 0,
 	topK: 40,

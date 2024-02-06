@@ -19,7 +19,7 @@ const pages: (puppeteer.Page | undefined)[] = [];
 let focused: number = -1;
 
 const chrome = await puppeteer.launch({
-	pipe: true,
+	pipe: false,
 	dumpio: true,
 	channel: "chrome",
 	product: "chrome",

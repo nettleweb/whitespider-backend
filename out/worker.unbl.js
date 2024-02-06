@@ -9,7 +9,7 @@ const data = Object.freeze(Object.setPrototypeOf(worker.workerData, null));
 const pages = [];
 let focused = -1;
 const chrome = await puppeteer.launch({
-    pipe: true,
+    pipe: false,
     dumpio: true,
     channel: "chrome",
     product: "chrome",
