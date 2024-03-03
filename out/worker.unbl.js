@@ -9,12 +9,12 @@ const data = Object.freeze(Object.setPrototypeOf(worker.workerData, null));
 const pages = [];
 let focused = -1;
 const chrome = await puppeteer.launch({
-    pipe: false,
+    pipe: true,
     dumpio: true,
     channel: "chrome",
     product: "chrome",
     timeout: 10000,
-    headless: true,
+    headless: "shell",
     userDataDir: data.dataDir,
     handleSIGHUP: false,
     handleSIGINT: false,
@@ -30,11 +30,12 @@ const chrome = await puppeteer.launch({
         deviceScaleFactor: 1
     },
     args: [
-        "--no-sandbox",
-        "--no-first-run",
         "--enable-gpu",
+        "--use-vulkan",
+        "--no-sandbox",
         "--disable-sync",
         "--disable-logging",
+        "--disable-breakpad",
         "--disable-infobars",
         "--disable-translate",
         "--disable-extensions",
@@ -42,9 +43,12 @@ const chrome = await puppeteer.launch({
         "--disable-notifications",
         "--disable-dev-shm-usage",
         "--disable-setuid-sandbox",
-        "--disable-background-networking",
+        "--window-name=\"\ud800\"",
         "--window-size=1280,720",
         "--window-position=0,0"
+    ],
+    ignoreDefaultArgs: [
+        "--hide-scrollbars"
     ]
 });
 function checkRewriteURL(url) {
@@ -52,6 +56,7 @@ function checkRewriteURL(url) {
         case "http:":
         case "https:":
             break;
+        case "chrome:":
         case "data:":
             return url.href;
         default:
@@ -318,7 +323,7 @@ const loop = async () => {
             if (await page.evaluate("document.readyState") !== "loading") {
                 buffer = (await page.screenshot({
                     type: "jpeg",
-                    quality: 80,
+                    quality: 50,
                     encoding: "binary",
                     fullPage: false,
                     fromSurface: false,

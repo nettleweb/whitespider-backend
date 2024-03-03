@@ -1,31 +1,59 @@
 import worker from "worker_threads";
-import gpt4all from "gpt4all";
+import { LlamaModel, LlamaContext, getLlama } from "node-llama-cpp";
 const port = worker.parentPort;
 if (worker.isMainThread)
     throw new Error("Invalid worker context");
-const model = await gpt4all.loadModel("mistral-7b-openorca.Q4_0.gguf", {
-    type: "inference",
-    device: "gpu",
-    verbose: false,
-    modelPath: "./local/",
-    allowDownload: true
+let message = "";
+for (const item of worker.workerData) {
+    if (typeof item !== "object")
+        throw new Error("Message entry must be an object.");
+    const { role, content } = item;
+    if (typeof content !== "string")
+        throw new Error("Invalid message content: " + content);
+    switch (role) {
+        case "user":
+            message += "### Instruction:\n" + content + "\n### Response:\n";
+            break;
+        case "assistant":
+            message += content + "\n";
+            break;
+        default:
+            throw new Error("Invalid message role: " + role);
+    }
+}
+const model = new LlamaModel({
+    llama: await getLlama({
+        cuda: true,
+        build: "auto"
+    }),
+    useMmap: false,
+    useMlock: false,
+    modelPath: "./local/mistral-7b-openorca.Q4_0.gguf",
+    gpuLayers: 32,
 });
-model.llm.setThreadCount(4);
-model.config.systemPrompt = "";
-model.config.promptTemplate = "### Human:\n%1\n### Assistant:\n";
-const response = await gpt4all.createCompletion(model, worker.workerData, {
-    contextErase: 0,
-    logitsSize: 0,
-    tokensSize: 0,
-    nPredict: 2048,
-    nBatch: 32,
-    nPast: 0,
-    nCtx: 0,
+const context = new LlamaContext({
+    model: model,
+    seed: 0,
+    threads: 4,
+    sequences: 1,
+    batchSize: 128,
+    contextSize: 2048,
+});
+const sequence = context.getSequence();
+await sequence.clearHistory();
+const tokens = [];
+for await (const token of sequence.evaluate(model.tokenize(message, true), {
     topK: 40,
     topP: 0.4,
-    temp: 0.8,
-    repeatLastN: 64,
-    repeatPenalty: 1.1,
-});
+    temperature: 0.8,
+    evaluationPriority: 5,
+})) {
+    tokens.push(token);
+    const text = model.detokenize(tokens);
+    if (text.indexOf("<dummy32000>") > 0)
+        break;
+    port.postMessage(text);
+}
+sequence.dispose();
+context.dispose();
 model.dispose();
-port.postMessage(response.choices[0].message.content);

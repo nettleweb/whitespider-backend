@@ -145,7 +145,7 @@ httpServer.on("error", errorCB);
 //////////////////////////////////////////////////
 
 const io = new Server(httpServer, {
-	path: "/untrihexium_v2/",
+	path: "/unbioctium/",
 	cors: {
 		origin: true,
 		maxAge: 7200,
@@ -159,7 +159,8 @@ const io = new Server(httpServer, {
 	connectTimeout: 20000,
 	upgradeTimeout: 5000,
 	httpCompression: true,
-	maxHttpBufferSize: 1024,
+	perMessageDeflate: true,
+	maxHttpBufferSize: 10000000,
 	destroyUpgrade: true,
 	destroyUpgradeTimeout: 1000,
 	cleanupEmptyChildNamespaces: true
@@ -168,14 +169,16 @@ io.on("connection", (socket) => {
 	let endSession: (() => void) | undefined;
 
 	socket.on("end_session", () => {
-		endSession?.apply(void 0, []);
+		if (endSession != null)
+			endSession();
 	});
 	socket.on("disconnect", () => {
 		socket.removeAllListeners();
 		socket.disconnect(true);
-		endSession?.apply(void 0, []);
+		if (endSession != null)
+			endSession();
 	});
-	socket.on("request_new_session", (options) => {
+	socket.on("ns", (options) => {
 		if (endSession != null || typeof options !== "object") {
 			socket.disconnect(true);
 			return;
@@ -211,19 +214,21 @@ io.on("connection", (socket) => {
 				stackSizeMb: 8
 			}
 		});
+		const handler = (...args: any[]) => thread.postMessage(args);
+		socket.onAny(handler);
 
-		socket.onAny((...args) => thread.postMessage(args));
-		thread.on("message", (args) => socket.emit.apply(socket, args));
+		thread.on("message", (args: [string, ...any]) => socket.emit(...args));
 		thread.on("error", (err) => {
 			console.error("Worker Error: ", err);
+			socket.offAny(handler);
 			thread.removeAllListeners();
 			try {
 				fs.rmSync(dataDir, { force: true, recursive: true });
 			} catch (err) { }
 			endSession = void 0;
 		});
-
 		endSession = () => {
+			socket.offAny(handler);
 			thread.removeAllListeners();
 			thread.postMessage(["stop"]);
 			thread.once("exit", () => {
@@ -234,7 +239,12 @@ io.on("connection", (socket) => {
 			});
 		};
 	});
-	socket.on("gpt_request", async (messages: import("gpt4all").PromptMessage[]) => {
+	socket.on("gptreq", async (messages) => {
+		if (endSession != null || !Array.isArray(messages)) {
+			socket.disconnect(true);
+			return;
+		}
+
 		await gpuLock; gpuLock.lock();
 
 		const thread = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.gpu.js")), {
@@ -250,29 +260,24 @@ io.on("connection", (socket) => {
 				stackSizeMb: 8
 			}
 		});
-	
+		endSession = () => thread.terminate();
 		thread.on("message", (data: string) => {
-			socket.emit("gpt_response", data);
+			socket.emit("gptres", data);
 		});
 
 		try {
 			await new Promise<void>((resolve, reject) => {
-				thread.once("exit", (code) => {
-					if (code === 0)
-						resolve();
-					else
-						reject("Process exited with non-zero code: " + code);
-				});
+				thread.once("exit", (code) => code === 0 ? resolve() : reject("Process exited with error code: " + code));
 				thread.once("error", (err) => reject(err));
 			});
-			socket.emit("gpt_end")
+			socket.emit("gptend");
 		} catch (err) {
 			console.error("GPU worker error: ", err);
-			socket.emit("gpt_error");
+			socket.emit("gpterr");
 		}
 
-		await thread.terminate();
 		thread.removeAllListeners();
 		gpuLock.unlock();
+		endSession = void 0;
 	});
 });
