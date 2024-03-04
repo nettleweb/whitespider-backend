@@ -1,6 +1,6 @@
 {
 	"name": "whitespider-backend",
-	"author": "WhiteSpider Dev Team",
+	"author": "WhiteSpider Dev <support@whitespider.dev> (https://whitespider.dev/)",
 	"license": "GPL-3.0",
 	"version": "0.0.1",
 	"homepage": "https://github.com/whitespider-dev/whitespider-backend#readme",
@@ -15,14 +15,14 @@
 	},
 	"bugs": {
 		"url": "https://github.com/whitespider-dev/whitespider-backend/issues",
-		"email": "admin@whitespider.dev"
+		"email": "support@whitespider.dev"
 	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/whitespider-dev/whitespider-backend.git"
 	},
 	"dependencies": {
-		"node-llama-cpp": "^3.0.0-beta.11",
+		"node-llama-cpp": "^3.0.0-beta.13",
 		"puppeteer": "^22.2.0",
 		"socket.io": "^4.7.4"
 	},

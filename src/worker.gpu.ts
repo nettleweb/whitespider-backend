@@ -17,10 +17,10 @@ for (const item of worker.workerData) {
 
 	switch (role) {
 		case "user":
-			message += "### Instruction:\n" + content + "\n### Response:\n";
+			message += "<|im_start|>user\n" + content + "<|im_end|>\n<|im_start|>assistant\n";
 			break;
 		case "assistant":
-			message += content + "\n";
+			message += content + "<|im_end|>\n";
 			break;
 		default:
 			throw new Error("Invalid message role: " + role);
@@ -29,13 +29,15 @@ for (const item of worker.workerData) {
 
 const model = new LlamaModel({
 	llama: await getLlama({
-		cuda: true,
-		build: "auto"
+		gpu: "cuda",
+		build: "auto",
+		usePrebuiltBinaries: true,
+		existingPrebuiltBinaryMustMatchBuildOptions: true
 	}),
 	useMmap: false,
 	useMlock: false,
-	modelPath: "./local/mistral-7b-openorca.Q4_0.gguf",
-	gpuLayers: 32,
+	modelPath: "./local/Nous-Hermes-2-Mistral-7B-DPO.Q4_0.gguf",
+	gpuLayers: 32
 });
 
 const context = new LlamaContext({
@@ -44,11 +46,15 @@ const context = new LlamaContext({
 	threads: 4,
 	sequences: 1,
 	batchSize: 128,
-	contextSize: 2048,
+	contextSize: 2048
 });
 
-const sequence = context.getSequence();
-await sequence.clearHistory();
+const sequence = context.getSequence({
+	contextShift: {
+		size: 8192,
+		strategy: "eraseBeginning"
+	}
+});
 
 const tokens: Token[] = [];
 
@@ -56,15 +62,10 @@ for await (const token of sequence.evaluate(model.tokenize(message, true), {
 	topK: 40,
 	topP: 0.4,
 	temperature: 0.8,
-	evaluationPriority: 5,
+	evaluationPriority: 5
 })) {
 	tokens.push(token);
-
-	const text = model.detokenize(tokens);
-	if (text.indexOf("<dummy32000>") > 0)
-		break;
-
-	port.postMessage(text);
+	port.postMessage(model.detokenize(tokens));
 }
 
 sequence.dispose();

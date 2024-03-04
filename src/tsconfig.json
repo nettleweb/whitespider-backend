@@ -12,6 +12,7 @@
 		"alwaysStrict": true,
 		"moduleResolution": "Node16",
 		"strictNullChecks": true,
+		"strictBindCallApply": true,
 		"strictFunctionTypes": true,
 		"strictPropertyInitialization": true,
 		"forceConsistentCasingInFileNames": true
