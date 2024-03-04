@@ -1,13 +1,20 @@
 {
-	"name": "whitespider-backend",
+	"name": "@whitespider/backend",
 	"author": "WhiteSpider Dev <support@whitespider.dev> (https://whitespider.dev/)",
 	"license": "GPL-3.0",
 	"version": "0.0.1",
 	"homepage": "https://github.com/whitespider-dev/whitespider-backend#readme",
 	"description": "WhiteSpider Unblocker Backend",
+	"bin": {
+		"whitespider-backend": "./out/main.js"
+	},
 	"main": "main.js",
 	"type": "module",
-	"files": [],
+	"files": [
+		"/out/",
+		"main.js",
+		"package.json"
+	],
 	"keywords": [],
 	"engines": {
 		"node": ">=18.17.1",
