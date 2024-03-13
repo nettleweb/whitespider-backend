@@ -31,7 +31,8 @@ const model = new LlamaModel({
 	llama: await getLlama({
 		gpu: "cuda",
 		build: "auto",
-		usePrebuiltBinaries: true,
+		skipDownload: true,
+		usePrebuiltBinaries: false,
 		existingPrebuiltBinaryMustMatchBuildOptions: true
 	}),
 	useMmap: false,

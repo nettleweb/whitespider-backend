@@ -6,6 +6,7 @@ import https from "https";
 import Path from "path";
 import worker from "worker_threads";
 import { Server } from "socket.io";
+import { getLlama } from "node-llama-cpp";
 import { AsyncLock } from "./AsyncLock.js";
 
 function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -104,6 +105,14 @@ for (const file of fs.readdirSync("./local/", { encoding: "utf-8" })) {
 
 const gpuLock: AsyncLock = new AsyncLock();
 
+// ensure llama module is loaded
+await getLlama({
+	gpu: "cuda",
+	build: "auto",
+	usePrebuiltBinaries: false,
+	existingPrebuiltBinaryMustMatchBuildOptions: true
+});
+
 //////////////////////////////////////////////////
 // HTTP Server
 //////////////////////////////////////////////////
@@ -194,6 +203,12 @@ io.on("connection", (socket) => {
 		const dataDir = "./local/data-" + Date.now();
 		width = Math.max(Math.min(width, landscape ? 1280 : 720), 300);
 		height = Math.max(Math.min(height, landscape ? 720 : 1280), 300);
+
+		fs.cpSync("./local/data", dataDir, {
+			force: true,
+			recursive: true,
+			errorOnExist: true
+		});
 
 		const thread = new worker.Worker(url.fileURLToPath(import.meta.resolve("./worker.unbl.js")), {
 			name: "Handler",

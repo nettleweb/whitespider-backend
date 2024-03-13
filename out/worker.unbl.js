@@ -14,7 +14,7 @@ const chrome = await puppeteer.launch({
     channel: "chrome",
     product: "chrome",
     timeout: 10000,
-    headless: "shell",
+    headless: true,
     userDataDir: data.dataDir,
     handleSIGHUP: false,
     handleSIGINT: false,
@@ -30,8 +30,9 @@ const chrome = await puppeteer.launch({
         deviceScaleFactor: 1
     },
     args: [
-        "--enable-gpu",
-        "--use-vulkan",
+        "--use-angle=vulkan",
+        "--enable-unsafe-webgpu",
+        "--enable-features=Vulkan",
         "--no-sandbox",
         "--disable-sync",
         "--disable-logging",
@@ -56,7 +57,6 @@ function checkRewriteURL(url) {
         case "http:":
         case "https:":
             break;
-        case "chrome:":
         case "data:":
             return url.href;
         default:

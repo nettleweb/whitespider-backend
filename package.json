@@ -30,7 +30,7 @@
 	},
 	"dependencies": {
 		"node-llama-cpp": "^3.0.0-beta.13",
-		"puppeteer": "^22.2.0",
+		"puppeteer": "^22.4.1",
 		"socket.io": "^4.7.4"
 	},
 	"devDependencies": {

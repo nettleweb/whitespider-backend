@@ -9,29 +9,32 @@ export interface AsyncLockConstructor {
 	readonly prototype: AsyncLock;
 }
 
-export const AsyncLock: AsyncLockConstructor = class __proto__ {
+export const AsyncLock: AsyncLockConstructor = class AsyncLock {
 	#v0: boolean = false;
-	#g0: Function | undefined;
+	#g0: Function[] = [];
 
-	get locked(): any { return this.#v0; }
+	get locked(): boolean { return this.#v0; }
 
-	then(p0: any): this {
+	then(p0: any): any {
 		if (typeof p0 === "function") {
 			if (this.#v0)
-				this.#g0 = p0;
+				this.#g0.push(p0);
 			else
-				p0.apply(void 0, []);
+				p0();
 		}
-		return this;
 	}
 
-	lock(): void {
+	lock() {
 		this.#v0 = true;
 	}
 
-	unlock(): void {
+	unlock() {
+		const cbs = this.#g0;
+		for (const cb of cbs)
+			cb();
+
+		cbs.length = 0;
 		this.#v0 = false;
-		this.#g0?.apply(void 0, []);
 	}
 }
 
