@@ -3,7 +3,6 @@ export interface AsyncLock extends PromiseLike<void> {
 	readonly lock: () => void;
 	readonly unlock: () => void;
 }
-
 export interface AsyncLockConstructor {
 	new(): AsyncLock;
 	readonly prototype: AsyncLock;
@@ -13,7 +12,21 @@ export const AsyncLock: AsyncLockConstructor = class AsyncLock {
 	#v0: boolean = false;
 	#g0: Function[] = [];
 
-	get locked(): boolean { return this.#v0; }
+	static {
+		const __proto__ = AsyncLock.prototype;
+		Object.setPrototypeOf(__proto__, null);
+		Object.defineProperty(__proto__, Symbol.toStringTag, {
+			value: "AsyncLock",
+			writable: false,
+			enumerable: false,
+			configurable: false
+		});
+		Object.freeze(__proto__);
+	}
+
+	get locked(): boolean {
+		return this.#v0;
+	}
 
 	then(p0: any): any {
 		if (typeof p0 === "function") {
@@ -37,13 +50,3 @@ export const AsyncLock: AsyncLockConstructor = class AsyncLock {
 		this.#v0 = false;
 	}
 }
-
-const __proto__ = AsyncLock.prototype;
-Object.setPrototypeOf(__proto__, null);
-Object.defineProperty(__proto__, Symbol.toStringTag, {
-	value: "AsyncLock",
-	writable: false,
-	enumerable: false,
-	configurable: false
-});
-Object.freeze(__proto__);

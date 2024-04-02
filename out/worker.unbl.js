@@ -1,7 +1,7 @@
+import fs from "fs";
 import worker from "worker_threads";
 import process from "process";
 import puppeteer from "puppeteer";
-import stubImage from "./stubImage.js";
 const port = worker.parentPort;
 if (worker.isMainThread)
     throw new Error("Invalid worker context");
@@ -10,7 +10,7 @@ const pages = [];
 let focused = -1;
 const chrome = await puppeteer.launch({
     pipe: true,
-    dumpio: true,
+    dumpio: false,
     channel: "chrome",
     product: "chrome",
     timeout: 10000,
@@ -52,6 +52,7 @@ const chrome = await puppeteer.launch({
         "--hide-scrollbars"
     ]
 });
+const stubImage = fs.readFileSync("./res/loading.jpg").buffer;
 function checkRewriteURL(url) {
     switch (url.protocol) {
         case "http:":

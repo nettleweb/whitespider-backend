@@ -1,7 +1,7 @@
+import fs from "fs";
 import worker from "worker_threads";
 import process from "process";
 import puppeteer from "puppeteer";
-import stubImage from "./stubImage.js";
 
 const port = worker.parentPort!;
 if (worker.isMainThread)
@@ -20,7 +20,7 @@ let focused: number = -1;
 
 const chrome = await puppeteer.launch({
 	pipe: true,
-	dumpio: true,
+	dumpio: false,
 	channel: "chrome",
 	product: "chrome",
 	timeout: 10000,
@@ -62,6 +62,8 @@ const chrome = await puppeteer.launch({
 		"--hide-scrollbars"
 	]
 });
+
+const stubImage: ArrayBuffer = fs.readFileSync("./res/loading.jpg").buffer;
 
 type MouseEvent = { readonly type: "mousedown" | "mouseup" | "mousemove"; readonly x: number; readonly y: number; readonly button: puppeteer.MouseButton; };
 type TouchEvent = { readonly type: "touchstart" | "touchend" | "touchmove"; readonly x: number; readonly y: number; };

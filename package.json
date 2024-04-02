@@ -5,9 +5,6 @@
 	"version": "0.0.1",
 	"homepage": "https://github.com/whitespider-dev/whitespider-backend#readme",
 	"description": "WhiteSpider Unblocker Backend",
-	"bin": {
-		"whitespider-backend": "./out/main.js"
-	},
 	"main": "main.js",
 	"type": "module",
 	"files": [
@@ -29,9 +26,9 @@
 		"url": "git+https://github.com/whitespider-dev/whitespider-backend.git"
 	},
 	"dependencies": {
-		"node-llama-cpp": "^3.0.0-beta.13",
-		"puppeteer": "^22.4.1",
-		"socket.io": "^4.7.4"
+		"node-llama-cpp": "^3.0.0-beta.14",
+		"puppeteer": "^22.6.1",
+		"socket.io": "^4.7.5"
 	},
 	"devDependencies": {
 		"typescript": "^5.3.3"
