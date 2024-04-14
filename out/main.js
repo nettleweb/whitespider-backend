@@ -85,6 +85,8 @@ async function fetchBuffer(url, signal) {
     }
 }
 async function handleLogin(token, signal) {
+    if (typeof token !== "string" || token.length === 0)
+        throw new Error("Invalid token");
     const user = await fetchJSON("https://www.googleapis.com/oauth2/v1/userinfo?alt=json&access_token=" + encodeURIComponent(token), signal);
     if (user == null)
         throw new Error("Failed to retrieve user data.");
@@ -137,6 +139,58 @@ async function handleLogin(token, signal) {
     }
     return list[id].secrets;
 }
+async function handleLogin2(user, pass, signal) {
+    if (typeof user !== "string" || (user = user.trim().toLowerCase()).length < 4 || user.length > 20 || !/^[\-a-z0-9]+/.test(user))
+        throw new Error("Invalid user ID");
+    if (typeof pass !== "string" || pass.length < 8 || pass.length > 30)
+        throw new Error("Invalid password");
+    const info = JSON.parse(await fs.promises.readFile("./local/users.json", {
+        signal: signal,
+        encoding: "utf-8"
+    }))[user];
+    if (info == null)
+        throw new Error("User does not exist: " + user);
+    const password = info.password;
+    if (password == null || password !== pass)
+        throw new Error("Incorrect password");
+    return info.secrets;
+}
+async function handleRegister(user, pass, signal) {
+    if (typeof user !== "string" || (user = user.trim().toLowerCase()).length < 4 || user.length > 20 || !/^[\-a-z0-9]+/.test(user))
+        throw new Error("Invalid user ID");
+    if (typeof pass !== "string" || pass.length < 8 || pass.length > 30)
+        throw new Error("Invalid password");
+    const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
+        signal: signal,
+        encoding: "utf-8"
+    }));
+    if (user in list)
+        throw new Error("User already exists: " + user);
+    // generate account secrets
+    let secrets = "";
+    for (const ch of crypto.getRandomValues(new Uint8Array(new ArrayBuffer(1024), 0, 1024)))
+        secrets += ch.toString(16).padStart(2, "0");
+    // generate uid
+    const uid = Date.now().toString(10);
+    list[user] = {
+        vip: null,
+        uid: uid,
+        name: "",
+        email: "",
+        secrets: secrets,
+        password: pass
+    };
+    fs.writeFileSync("./local/users.json", JSON.stringify(list, void 0, "\t"), {
+        mode: 0o600,
+        flush: true,
+        encoding: "utf-8"
+    });
+    fs.cpSync("./res/user.png", "./local/avatar/" + uid + ".jpg", {
+        dereference: true,
+        errorOnExist: true
+    });
+    return secrets;
+}
 function handleUserInfoSync(uid) {
     const list = JSON.parse(fs.readFileSync("./local/users.json", "utf-8"));
     let info = null;
@@ -154,6 +208,8 @@ function handleUserInfoSync(uid) {
     };
 }
 async function handleUserInfo(uid, signal) {
+    if (typeof uid !== "string" || uid.length === 0)
+        throw new Error("Invalid UID");
     const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
         signal: signal,
         encoding: "utf-8"
@@ -173,6 +229,8 @@ async function handleUserInfo(uid, signal) {
     };
 }
 async function handleUserData(secrets, signal) {
+    if (typeof secrets !== "string" || secrets.length !== 2048)
+        throw new Error("Invalid token");
     const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
         signal: signal,
         encoding: "utf-8"
@@ -199,12 +257,16 @@ async function handleUserData(secrets, signal) {
     };
 }
 async function handleChangeId(secrets, newId, signal) {
+    if (typeof secrets !== "string" || secrets.length !== 2048)
+        throw new Error("Invalid token");
+    if (typeof newId !== "string" || (newId = newId.trim().toLowerCase()).length < 4 || newId.length > 20 || !/^[\-a-z0-9]+/.test(newId))
+        throw new Error("Invalid new ID");
     const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
         signal: signal,
         encoding: "utf-8"
     }));
-    if ((newId = newId.trim().toLowerCase()) in list)
-        throw new Error("User ID already exists: " + newId);
+    if (newId in list)
+        throw new Error("User already exists: " + newId);
     let info = null;
     for (const k of Object.keys(list)) {
         const v = list[k];
@@ -224,6 +286,10 @@ async function handleChangeId(secrets, newId, signal) {
     });
 }
 async function handleChangeAvatar(secrets, img, signal) {
+    if (typeof secrets !== "string" || secrets.length !== 2048)
+        throw new Error("Invalid token");
+    if (!ArrayBuffer.isView(img) || img.byteLength === 0 || img.byteLength > 2097152)
+        throw new Error("Invalid image data");
     let uid = null;
     {
         const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
@@ -245,7 +311,42 @@ async function handleChangeAvatar(secrets, img, signal) {
         flush: true
     });
 }
+async function handleChangePassword(secrets, curPass, newPass, signal) {
+    if (typeof secrets !== "string" || secrets.length !== 2048)
+        throw new Error("Invalid token");
+    if (typeof curPass !== "string" || curPass.length < 8 || curPass.length > 30)
+        throw new Error("Invalid password");
+    if (typeof newPass !== "string" || newPass.length < 8 || newPass.length > 30)
+        throw new Error("Invalid password");
+    const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
+        signal: signal,
+        encoding: "utf-8"
+    }));
+    let info = null;
+    for (const k of Object.keys(list)) {
+        const v = list[k];
+        if (v.secrets === secrets) {
+            info = v;
+            break;
+        }
+    }
+    if (info == null)
+        throw new Error("Invalid credentials");
+    {
+        const p = info.password;
+        if ((p == null && curPass !== "CHANGEME!") || (p != null && curPass !== p))
+            throw new Error("Incorrect current password");
+        info.password = newPass;
+    }
+    fs.writeFileSync("./local/users.json", JSON.stringify(list, void 0, "\t"), {
+        mode: 0o600,
+        flush: true,
+        encoding: "utf-8"
+    });
+}
 async function handleRequestMessages(chId, bef, aft, signal) {
+    if (typeof chId !== "string" || chId.length === 0)
+        throw new Error("Invalid channel ID");
     const channel = await client.channels.fetch(chId, {
         cache: true,
         force: true,
@@ -302,8 +403,12 @@ async function handleRequestMessages(chId, bef, aft, signal) {
     return messages;
 }
 async function handlePostMessage(secrets, chId, text, signal) {
-    if ((text = text.trim()).length === 0)
-        throw new Error("Message content must not be empty.");
+    if (typeof secrets !== "string" || secrets.length !== 2048)
+        throw new Error("Invalid token");
+    if (typeof chId !== "string" || chId.length === 0)
+        throw new Error("Invalid channel ID");
+    if (typeof text !== "string" || ((text = text.trim())).length === 0)
+        throw new Error("Invalid message");
     let uid = null;
     let name = null;
     {
@@ -354,9 +459,13 @@ async function handlePostMessage(secrets, chId, text, signal) {
     }
 }
 async function handleUploadGames(secrets, data, signal) {
+    if (typeof secrets !== "string" || secrets.length !== 2048)
+        throw new Error("Invalid token");
     const [name, type, tags, desc, buffer] = data;
     if (typeof name !== "string" || typeof type !== "string" || typeof tags !== "string" || typeof desc !== "string")
         throw new Error("Invalid upload options");
+    if (!ArrayBuffer.isView(buffer) || buffer.byteLength === 0 || buffer.byteLength > 26214400)
+        throw new Error("Invalid upload data");
     let uid = null;
     {
         const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
@@ -422,6 +531,10 @@ async function handleFetch(path, data, signal) {
     switch (path) {
         case 0 /* SIOPath.login */:
             return await handleLogin(data, signal);
+        case 10 /* SIOPath.login2 */:
+            return await handleLogin2(data[0], data[1], signal);
+        case 11 /* SIOPath.register */:
+            return await handleRegister(data[0], data[1], signal);
         case 1 /* SIOPath.userinfo */:
             return await handleUserInfo(data, signal);
         case 2 /* SIOPath.userdata */:
@@ -430,6 +543,8 @@ async function handleFetch(path, data, signal) {
             return await handleChangeId(data[0], data[1], signal);
         case 4 /* SIOPath.changeavatar */:
             return await handleChangeAvatar(data[0], data[1], signal);
+        case 9 /* SIOPath.changePassword */:
+            return await handleChangePassword(data[0], data[1], data[2], signal);
         case 7 /* SIOPath.requestmessages */:
             return await handleRequestMessages(data[0], data[1], data[2], signal);
         case 8 /* SIOPath.postmessage */:

@@ -1,11 +1,13 @@
 import fs from "fs";
 import dns from "dns";
 import url from "url";
-import http from "http";
 import Path from "path"
+import http from "http";
+import https from "https";
 import crypto from "crypto";
 import worker from "worker_threads";
-import { Server } from "socket.io";
+import discord from "discord.js";
+import { Server, Socket } from "socket.io";
 import { Token, getLlama } from "node-llama-cpp";
 import { AsyncLock } from "./AsyncLock.js";
 
@@ -71,13 +73,14 @@ async function fetchJSON(url: string | URL, signal: AbortSignal): Promise<any> {
 	}
 }
 
-async function fetchBuffer(url: string | URL): Promise<ArrayBuffer | null> {
+async function fetchBuffer(url: string | URL, signal: AbortSignal): Promise<ArrayBuffer | null> {
 	try {
 		const res = await fetch(url, {
 			method: "GET",
 			headers: {
 				"Accept": "application/json"
-			}
+			},
+			signal: signal
 		});
 		return res.ok ? await res.arrayBuffer() : null;
 	} catch (err) {
@@ -87,6 +90,9 @@ async function fetchBuffer(url: string | URL): Promise<ArrayBuffer | null> {
 }
 
 async function handleLogin(token: string, signal: AbortSignal): Promise<string> {
+	if (typeof token !== "string" || token.length === 0)
+		throw new Error("Invalid token");
+
 	const user = await fetchJSON("https://www.googleapis.com/oauth2/v1/userinfo?alt=json&access_token=" + encodeURIComponent(token), signal);
 	if (user == null)
 		throw new Error("Failed to retrieve user data.");
@@ -137,7 +143,7 @@ async function handleLogin(token: string, signal: AbortSignal): Promise<string> 
 			encoding: "utf-8"
 		});
 
-		let avatar: ArrayBuffer | null = await fetchBuffer(user.picture);
+		let avatar: ArrayBuffer | null = await fetchBuffer(user.picture, signal);
 		if (avatar == null)
 			avatar = fs.readFileSync("./res/user.png").buffer;
 
@@ -152,7 +158,94 @@ async function handleLogin(token: string, signal: AbortSignal): Promise<string> 
 	return list[id].secrets;
 }
 
+async function handleLogin2(user: string, pass: string, signal: AbortSignal): Promise<string> {
+	if (typeof user !== "string" || (user = user.trim().toLowerCase()).length < 4 || user.length > 20 || !/^[\-a-z0-9]+/.test(user))
+		throw new Error("Invalid user ID");
+	if (typeof pass !== "string" || pass.length < 8 || pass.length > 30)
+		throw new Error("Invalid password");
+
+	const info = JSON.parse(await fs.promises.readFile("./local/users.json", {
+		signal: signal,
+		encoding: "utf-8"
+	}))[user];
+
+	if (info == null)
+		throw new Error("User does not exist: " + user);
+
+	const password = info.password;
+	if (password == null || password !== pass)
+		throw new Error("Incorrect password");
+
+	return info.secrets;
+}
+
+async function handleRegister(user: string, pass: string, signal: AbortSignal): Promise<string> {
+	if (typeof user !== "string" || (user = user.trim().toLowerCase()).length < 4 || user.length > 20 || !/^[\-a-z0-9]+/.test(user))
+		throw new Error("Invalid user ID");
+	if (typeof pass !== "string" || pass.length < 8 || pass.length > 30)
+		throw new Error("Invalid password");
+
+	const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
+		signal: signal,
+		encoding: "utf-8"
+	}));
+
+	if (user in list)
+		throw new Error("User already exists: " + user);
+
+	// generate account secrets
+	let secrets: string = "";
+	for (const ch of crypto.getRandomValues(new Uint8Array(new ArrayBuffer(1024), 0, 1024)))
+		secrets += ch.toString(16).padStart(2, "0");
+
+	// generate uid
+	const uid = Date.now().toString(10);
+
+	list[user] = {
+		vip: null,
+		uid: uid,
+		name: "",
+		email: "",
+		secrets: secrets,
+		password: pass
+	};
+	fs.writeFileSync("./local/users.json", JSON.stringify(list, void 0, "\t"), {
+		mode: 0o600,
+		flush: true,
+		encoding: "utf-8"
+	});
+	fs.cpSync("./res/user.png", "./local/avatar/" + uid + ".jpg", {
+		dereference: true,
+		errorOnExist: true
+	});
+
+	return secrets;
+}
+
+function handleUserInfoSync(uid: string): any {
+	const list = JSON.parse(fs.readFileSync("./local/users.json", "utf-8"));
+
+	let info = null;
+
+	for (const k of Object.keys(list)) {
+		const v = list[k];
+		if (v.uid === uid) {
+			v.id = k;
+			info = v;
+			break;
+		}
+	}
+
+	return {
+		id: info.id,
+		avatar: fs.readFileSync("./local/avatar/" + uid + ".jpg")
+	};
+}
+
 async function handleUserInfo(uid: string, signal: AbortSignal): Promise<any> {
+	if (typeof uid !== "string" || uid.length === 0)
+		throw new Error("Invalid UID");
+
 	const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
 		signal: signal,
 		encoding: "utf-8"
@@ -169,13 +262,16 @@ async function handleUserInfo(uid: string, signal: AbortSignal): Promise<any> {
 		}
 	}
 
-	return Object.freeze(Object.setPrototypeOf({
+	return {
 		id: info.id,
 		avatar: await fs.promises.readFile("./local/avatar/" + uid + ".jpg", { signal: signal })
-	}, null));
+	};
 }
 
 async function handleUserData(secrets: string, signal: AbortSignal): Promise<any> {
+	if (typeof secrets !== "string" || secrets.length !== 2048)
+		throw new Error("Invalid token");
+
 	const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
 		signal: signal,
 		encoding: "utf-8"
@@ -197,24 +293,29 @@ async function handleUserData(secrets: string, signal: AbortSignal): Promise<any
 
 	const uid = info.uid;
 
-	return Object.freeze((Object.setPrototypeOf({
+	return {
 		id: info.id,
 		uid: uid,
 		vip: info.vip,
 		name: info.name,
 		email: info.email,
 		avatar: (await fs.promises.readFile("./local/avatar/" + uid + ".jpg", { signal: signal })).buffer
-	}, null)));
+	};
 }
 
 async function handleChangeId(secrets: string, newId: string, signal: AbortSignal): Promise<void> {
+	if (typeof secrets !== "string" || secrets.length !== 2048)
+		throw new Error("Invalid token");
+	if (typeof newId !== "string" || (newId = newId.trim().toLowerCase()).length < 4 || newId.length > 20 || !/^[\-a-z0-9]+/.test(newId))
+		throw new Error("Invalid new ID");
+
 	const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
 		signal: signal,
 		encoding: "utf-8"
 	}));
 
-	if ((newId = newId.trim().toLowerCase()) in list)
-		throw new Error("User ID already exists: " + newId);
+	if (newId in list)
+		throw new Error("User already exists: " + newId);
 
 	let info = null;
 
@@ -239,37 +340,12 @@ async function handleChangeId(secrets: string, newId: string, signal: AbortSigna
 }
 
 async function handleChangeAvatar(secrets: string, img: Buffer, signal: AbortSignal): Promise<void> {
-	const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
-		signal: signal,
-		encoding: "utf-8"
-	}));
+	if (typeof secrets !== "string" || secrets.length !== 2048)
+		throw new Error("Invalid token");
+	if (!ArrayBuffer.isView(img) || img.byteLength === 0 || img.byteLength > 2097152)
+		throw new Error("Invalid image data");
 
-	let uid = null;
-
-	for (const k of Object.keys(list)) {
-		const v = list[k];
-		if (v.secrets === secrets) {
-			uid = v.uid;
-			break;
-		}
-	}
-
-	if (uid == null)
-		throw new Error("Invalid credentials");
-
-	fs.writeFileSync("./local/avatar/" + uid + ".jpg", img, {
-		mode: 0o600,
-		flush: true,
-		signal: signal
-	});
-}
-
-async function handleUploadGames(secrets: string, data: any[], signal: AbortSignal): Promise<void> {
-	const [name, type, tags, desc, buffer] = data;
-	if (typeof name !== "string" || typeof type !== "string" || typeof tags !== "string" || typeof desc !== "string")
-		throw new Error("Invalid game data");
-
-	let uid = null;
+	let uid: string | null = null;
 
 	{
 		const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
@@ -284,10 +360,224 @@ async function handleUploadGames(secrets: string, data: any[], signal: AbortSign
 				break;
 			}
 		}
-
-		if (uid == null)
-			throw new Error("Invalid credentials");
 	}
+
+	if (uid == null)
+		throw new Error("Invalid credentials");
+
+	fs.writeFileSync("./local/avatar/" + uid + ".jpg", img, {
+		mode: 0o600,
+		flush: true
+	});
+}
+
+async function handleChangePassword(secrets: string, curPass: string, newPass: string, signal: AbortSignal): Promise<void> {
+	if (typeof secrets !== "string" || secrets.length !== 2048)
+		throw new Error("Invalid token");
+	if (typeof curPass !== "string" || curPass.length < 8 || curPass.length > 30)
+		throw new Error("Invalid password");
+	if (typeof newPass !== "string" || newPass.length < 8 || newPass.length > 30)
+		throw new Error("Invalid password");
+
+	const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
+		signal: signal,
+		encoding: "utf-8"
+	}));
+
+	let info = null;
+
+	for (const k of Object.keys(list)) {
+		const v = list[k];
+		if (v.secrets === secrets) {
+			info = v;
+			break;
+		}
+	}
+
+	if (info == null)
+		throw new Error("Invalid credentials");
+
+	{
+		const p = info.password;
+		if ((p == null && curPass !== "CHANGEME!") || (p != null && curPass !== p))
+			throw new Error("Incorrect current password");
+
+		info.password = newPass;
+	}
+
+	fs.writeFileSync("./local/users.json", JSON.stringify(list, void 0, "\t"), {
+		mode: 0o600,
+		flush: true,
+		encoding: "utf-8"
+	});
+}
+
+async function handleRequestMessages(chId: string, bef: string | undefined, aft: string | undefined, signal: AbortSignal): Promise<any> {
+	if (typeof chId !== "string" || chId.length === 0)
+		throw new Error("Invalid channel ID");
+
+	const channel = await client.channels.fetch(chId, {
+		cache: true,
+		force: true,
+		allowUnknownGuild: false
+	});
+
+	if (channel == null)
+		throw new Error("Failed to resolve channel: " + chId);
+
+	switch (channel.type) {
+		case discord.ChannelType.GuildText:
+		case discord.ChannelType.PublicThread:
+		case discord.ChannelType.PrivateThread:
+			break;
+		default:
+			throw new Error("Unsupported channel type: " + channel.type);
+	}
+
+	const messages: {
+		readonly id: string;
+		readonly msg: string;
+		readonly user: string;
+		readonly icon: string | Buffer;
+	}[] = [];
+
+	for (const msg of (await channel.messages.fetch({
+		before: bef,
+		after: aft,
+		limit: 10,
+		cache: true
+	})).values()) {
+		const text = msg.content.trim();
+		const msgId = msg.id;
+		const author = msg.author;
+
+		if (author.id === user.id) {
+			const uid = JSON.parse(await fs.promises.readFile("./local/msgs.json", {
+				signal: signal,
+				encoding: "utf-8"
+			}))[msg.id];
+
+			if (uid != null) {
+				const { id, avatar } = await handleUserInfo(uid, signal);
+				messages.push({
+					id: msgId,
+					msg: text.slice(text.indexOf("\n") + 1),
+					user: id,
+					icon: avatar
+				});
+			}
+		} else {
+			messages.push({
+				id: msgId,
+				msg: text,
+				user: author.username,
+				icon: author.avatarURL({
+					size: 64,
+					extension: "jpg",
+					forceStatic: true
+				}) || "/res/user.svg"
+			});
+		}
+	}
+
+	return messages;
+}
+
+async function handlePostMessage(secrets: string, chId: string, text: string, signal: AbortSignal): Promise<void> {
+	if (typeof secrets !== "string" || secrets.length !== 2048)
+		throw new Error("Invalid token");
+	if (typeof chId !== "string" || chId.length === 0)
+		throw new Error("Invalid channel ID");
+	if (typeof text !== "string" || ((text = text.trim())).length === 0)
+		throw new Error("Invalid message");
+
+	let uid: string | null = null;
+	let name: string | null = null;
+
+	{
+		const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
+			signal: signal,
+			encoding: "utf-8"
+		}));
+
+		for (const k of Object.keys(list)) {
+			const v = list[k];
+			if (v.secrets === secrets) {
+				uid = v.uid;
+				name = k;
+				break;
+			}
+		}
+	}
+
+	if (uid == null)
+		throw new Error("Invalid credentials");
+	if (name == null)
+		throw new Error("User data is corrupted: " + uid);
+
+	const channel = await client.channels.fetch(chId, {
+		cache: true,
+		force: true,
+		allowUnknownGuild: false
+	});
+
+	if (channel == null)
+		throw new Error("Failed to resolve channel: " + chId);
+
+	switch (channel.type) {
+		case discord.ChannelType.GuildText:
+		case discord.ChannelType.PublicThread:
+		case discord.ChannelType.PrivateThread:
+			break;
+		default:
+			throw new Error("Unsupported channel type: " + channel.type);
+	}
+
+	const avatar = await fs.promises.readFile("./local/avatar/" + uid + ".jpg", { signal: signal });
+	const msgId = (await channel.send("**" + name + ":**\n" + text)).id;
+	for (const socket of chatSockets)
+		socket.emit("msg", chId, msgId, text, name, avatar);
+
+	{
+		const list = JSON.parse(fs.readFileSync("./local/msgs.json", "utf-8"));
+		list[msgId] = uid;
+		fs.writeFileSync("./local/msgs.json", JSON.stringify(list, void 0, "\t"), {
+			mode: 0o600,
+			flush: true,
+			encoding: "utf-8"
+		});
+	}
+}
+
+async function handleUploadGames(secrets: string, data: any[], signal: AbortSignal): Promise<void> {
+	if (typeof secrets !== "string" || secrets.length !== 2048)
+		throw new Error("Invalid token");
+
+	const [name, type, tags, desc, buffer] = data;
+	if (typeof name !== "string" || typeof type !== "string" || typeof tags !== "string" || typeof desc !== "string")
+		throw new Error("Invalid upload options");
+	if (!ArrayBuffer.isView(buffer) || buffer.byteLength === 0 || buffer.byteLength > 26214400)
+		throw new Error("Invalid upload data");
+
+	let uid: string | null = null;
+
+	{
+		const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
+			signal: signal,
+			encoding: "utf-8"
+		}));
+
+		for (const k of Object.keys(list)) {
+			const v = list[k];
+			if (v.secrets === secrets) {
+				uid = v.uid;
+				break;
+			}
+		}
+	}
+
+	if (uid == null)
+		throw new Error("Invalid credentials");
 
 	const index = JSON.parse(fs.readFileSync("./local/games/index.json", "utf-8"));
 	const nameMap: Record<string, string> = {
@@ -312,15 +602,17 @@ async function handleUploadGames(secrets: string, data: any[], signal: AbortSign
 		}
 	}) + extname);
 
-	const absFile = Path.join("./local/", fileName);
-	if (fs.existsSync(absFile))
-		throw new Error("The game already exists.");
+	{
+		const absFile = Path.join("./local/", fileName);
+		if (fs.existsSync(absFile))
+			throw new Error("The game already exists.");
 
-	fs.writeFileSync(absFile, buffer, {
-		mode: 0o600,
-		flush: true,
-		encoding: "utf-8"
-	});
+		fs.writeFileSync(absFile, buffer as any, {
+			mode: 0o600,
+			flush: true,
+			encoding: "utf-8"
+		});
+	}
 
 	index.push({
 		name: name,
@@ -339,19 +631,44 @@ async function handleUploadGames(secrets: string, data: any[], signal: AbortSign
 	});
 }
 
-async function handleFetch(path: string, data: any, signal: AbortSignal): Promise<any> {
+const enum SIOPath {
+	login = 0,
+	login2 = 10,
+	register = 11,
+	userinfo = 1,
+	userdata = 2,
+	changeid = 3,
+	changeavatar = 4,
+	changePassword = 9,
+
+	requestmessages = 7,
+	postmessage = 8,
+	uploadgame = 5,
+}
+
+async function handleFetch(path: SIOPath, data: any, signal: AbortSignal): Promise<any> {
 	switch (path) {
-		case "login":
+		case SIOPath.login:
 			return await handleLogin(data, signal);
-		case "userinfo":
+		case SIOPath.login2:
+			return await handleLogin2(data[0], data[1], signal);
+		case SIOPath.register:
+			return await handleRegister(data[0], data[1], signal);
+		case SIOPath.userinfo:
 			return await handleUserInfo(data, signal);
-		case "userdata":
+		case SIOPath.userdata:
 			return await handleUserData(data, signal);
-		case "changeid":
+		case SIOPath.changeid:
 			return await handleChangeId(data[0], data[1], signal);
-		case "changeavatar":
+		case SIOPath.changeavatar:
 			return await handleChangeAvatar(data[0], data[1], signal);
-		case "uploadgame":
+		case SIOPath.changePassword:
+			return await handleChangePassword(data[0], data[1], data[2], signal);
+		case SIOPath.requestmessages:
+			return await handleRequestMessages(data[0], data[1], data[2], signal);
+		case SIOPath.postmessage:
+			return await handlePostMessage(data[0], data[1], data[2], signal);
+		case SIOPath.uploadgame:
 			return await handleUploadGames(data.shift(), data, signal);
 		default:
 			throw new Error("Invalid path: " + path);
@@ -418,6 +735,82 @@ const bos = model.tokens.bosString || "<|im_start|>";
 const eos = model.tokens.eosString || "<|im_end|>";
 
 //////////////////////////////////////////////////
+// Discord Bot
+//////////////////////////////////////////////////
+
+const client = new discord.Client<true>({
+	intents: 33280,
+	closeTimeout: 2000,
+	failIfNotExists: true
+});
+
+await client.login("MTIxNzE3MjE0Mjk0MTI3ODM2OA.GaNK5a.jTaZ-4b71zCAR3pnsLB-ZS4v6SMm3leh5HSx6E");
+await new Promise((resolve) => {
+	client.once("ready", resolve);
+});
+
+const user = client.user;
+await user.setAvatar("./res/logo512.png");
+await user.setUsername("WhiteSpider");
+user.setAFK(true, 0);
+user.setStatus("idle", 0);
+user.setActivity({
+	url: "https://whitespider.dev/",
+	name: "Loading...",
+	type: discord.ActivityType.Custom,
+	state: "",
+	shardId: 0
+});
+console.log("Logged in as " + user.tag);
+
+const chatSockets: Socket[] = [];
+
+client.on("messageCreate", (msg) => {
+	const text = msg.content.trim();
+	const msgId = msg.id;
+	const author = msg.author;
+	const channel = msg.channelId
+
+	if (author.id === user.id) {
+		const uid = JSON.parse(fs.readFileSync("./local/msgs.json", "utf-8"))[msgId];
+
+		if (uid != null) {
+			const { id, avatar } = handleUserInfoSync(uid);
+			const content = text.slice(text.indexOf("\n") + 1);
+
+			for (const socket of chatSockets)
+				socket.emit("msg", channel, msgId, content, id, avatar);
+		}
+	} else {
+		for (const socket of chatSockets) {
+			const user = author.username;
+			const avatar = author.avatarURL({
+				size: 64,
+				extension: "jpg",
+				forceStatic: true
+			});
+
+			socket.emit("msg", channel, msgId, text, user, avatar);
+		}
+	}
+});
+client.on("messageDelete", (msg) => {
+	const msgId = msg.id;
+	const channel = msg.channelId;
+
+	for (const socket of chatSockets)
+		socket.emit("msgdel", channel, msgId);
+});
+client.on("messageUpdate", (omsg, nmsg) => {
+	const text = (nmsg.content || "").trim();
+	const msgId = omsg.id;
+	const channel = omsg.channelId;
+
+	for (const socket of chatSockets)
+		socket.emit("msgupd", channel, msgId, text);
+});
+
+//////////////////////////////////////////////////
 // HTTP Server
 //////////////////////////////////////////////////
 
@@ -429,7 +822,7 @@ const httpServer = http.createServer({
 }, void 0);
 
 httpServer.listen(80, "0.0.0.0", 255, () => {
- 	let address = httpServer.address() || "unknown address";
+	let address = httpServer.address() || "unknown address";
 	if (typeof address !== "string")
 		address = address.address + ":" + address.port;
 	console.log("HTTP server started on " + address);
@@ -443,8 +836,8 @@ httpServer.on("error", errorCB);
 // socket.io
 //////////////////////////////////////////////////
 
-const io = new Server(httpServer, {
-	path: "/__api_/",
+const _io_ = new Server(httpServer, {
+	path: "/___api__/",
 	cors: {
 		origin: true,
 		maxAge: 7200,
@@ -463,27 +856,32 @@ const io = new Server(httpServer, {
 	destroyUpgradeTimeout: 1000,
 	cleanupEmptyChildNamespaces: true
 });
-io.on("connection", (socket) => {
+_io_.on("connection", (socket) => {
 	let endSession: (() => void) | undefined;
 
-	socket.on("error", errorCB);
+	socket.on("error", (err) => {
+		console.error("socket error: ", err);
+		socket.disconnect(true);
+		if (endSession != null)
+			endSession();
+	});
 	socket.on("end_session", () => {
 		if (endSession != null)
 			endSession();
 	});
 	socket.on("disconnect", () => {
-		socket.removeAllListeners();
 		socket.disconnect(true);
 		if (endSession != null)
 			endSession();
 	});
+
 	socket.on("ns", (options) => {
-		if (endSession != null || typeof options !== "object") {
+		if (endSession != null || options == null || typeof options !== "object") {
 			socket.disconnect(true);
 			return;
 		}
 
-		let { width, height, touch } = options;
+		const { width, height, touch } = options;
 		if (typeof width !== "number" || typeof height !== "number" || typeof touch !== "boolean") {
 			socket.disconnect(true);
 			return;
@@ -491,8 +889,6 @@ io.on("connection", (socket) => {
 
 		const landscape = width > height;
 		const dataDir = "./local/sessions/" + Date.now().toString(16);
-		width = Math.max(Math.min(width, landscape ? 1280 : 720), 300);
-		height = Math.max(Math.min(height, landscape ? 720 : 1280), 300);
 
 		fs.cpSync("./local/chrome/data", dataDir, {
 			force: true,
@@ -507,8 +903,8 @@ io.on("connection", (socket) => {
 			stderr: false,
 			workerData: {
 				touch: touch,
-				width: width,
-				height: height,
+				width: Math.max(Math.min(width, landscape ? 1280 : 720), 300),
+				height: Math.max(Math.min(height, landscape ? 720 : 1280), 300),
 				dataDir: dataDir,
 				landscape: landscape
 			},
@@ -544,20 +940,40 @@ io.on("connection", (socket) => {
 		};
 	});
 
+	socket.on("ncs", () => {
+		if (endSession != null) {
+			socket.disconnect(true);
+			return;
+		}
+
+		endSession = () => {
+			const i = chatSockets.indexOf(socket);
+			if (i >= 0)
+				chatSockets.splice(i, 1);
+
+			endSession = void 0;
+		};
+
+		chatSockets.push(socket);
+	});
+
 	socket.on("fetch", (id, path, data) => {
-		if (endSession != null || typeof id !== "string" || typeof path !== "string") {
+		if (typeof id !== "string" || typeof path !== "number") {
 			socket.disconnect(true);
 			return;
 		}
 
 		const controller = new AbortController();
-		endSession = () => controller.abort();
+		const callback = () => controller.abort();
+		socket.on("disconnect", callback);
+
 		handleFetch(path, data, controller.signal)
 			.then((data) => {
-				endSession = void 0;
+				socket.off("disconnect", callback);
 				socket.emit("res", id, data);
 			}).catch((err) => {
-				endSession = void 0;
+				console.error(err);
+				socket.off("disconnect", callback);
 				socket.emit("res", id, void 0, String(err));
 			});
 	});
@@ -575,16 +991,16 @@ io.on("connection", (socket) => {
 				if (typeof e !== "object")
 					throw new Error("Message entry must be an object.");
 
-				const { role, content } = e;
-				if (typeof content !== "string")
-					throw new Error("Invalid message content: " + content);
+				const { role, text } = e;
+				if (typeof text !== "string")
+					throw new Error("Invalid message text: " + text);
 
 				switch (role) {
-					case "user":
-						prompt += bos + "user\n" + content + eos + "\n";
+					case "u":
+						prompt += bos + "user\n" + text + eos + "\n";
 						break;
-					case "assistant":
-						prompt += bos + "assistant\n" + content + eos + "\n";
+					case "a":
+						prompt += bos + "assistant\n" + text + eos + "\n";
 						break;
 					default:
 						throw new Error("Invalid message role: " + role);
@@ -605,8 +1021,8 @@ io.on("connection", (socket) => {
 			}
 
 			const controller = new AbortController();
+			const signal = controller.signal;
 			endSession = () => controller.abort();
-			const { signal } = controller;
 			await gpuLock; gpuLock.lock();
 			signal.throwIfAborted();
 
@@ -648,5 +1064,120 @@ io.on("connection", (socket) => {
 
 		gpuLock.unlock();
 		endSession = void 0;
+	});
+
+	socket.on("netreq", async (id: string, url: string | URL, method: string, headers: any) => {
+		if (typeof url !== "string" || typeof method !== "string" || headers == null || typeof headers !== "object") {
+			socket.disconnect(true);
+			return;
+		}
+
+		const controller = new AbortController();
+		const signal = controller.signal;
+
+		const disCb = () => controller.abort();
+		socket.on("disconnect", disCb);
+
+		let outgoing: http.ClientRequest;
+
+		switch ((url = new URL(url)).protocol) {
+			case "http:":
+				outgoing = http.request({
+					protocol: "http:",
+					host: url.host,
+					port: url.port,
+					path: url.href.slice(url.origin.length),
+					signal: signal,
+					method: method,
+					headers: headers,
+					setHost: true
+				});
+				break;
+			case "https:":
+				outgoing = https.request({
+					protocol: "https:",
+					host: url.host,
+					port: url.port,
+					path: url.href.slice(url.origin.length),
+					signal: signal,
+					method: method,
+					headers: headers,
+					setHost: true
+				});
+				break;
+			default:
+				throw new Error("Unsupport URL protocol: " + url.protocol);
+		}
+
+		{
+			const dataCb = (msgId: string, data: ArrayBufferView) => {
+				if (msgId === id)
+					outgoing.write(data);
+			};
+			const endCb = (msgId: string) => {
+				if (msgId === id) {
+					socket.off("data", dataCb);
+					socket.off("end", endCb);
+					outgoing.end();
+				}
+			};
+
+			socket.on("data", dataCb);
+			socket.on("end", endCb);
+		}
+
+		outgoing.on("response", (res) => {
+			socket.off("disconnect", disCb);
+
+			const headers: Record<string, any> = res.headers;
+			for (const k of Object.keys(headers)) {
+				const v = headers[k];
+				if (typeof v === "string")
+					headers[k] = [v];
+			}
+			socket.emit("head", id, res.statusCode || 200, res.statusMessage || "", headers);
+
+			const abortCb = (msgId: string) => {
+				if (msgId === id) {
+					res.removeAllListeners();
+					res.destroy();
+
+					socket.off("abort", abortCb);
+					controller.abort();
+				}
+			};
+			socket.on("abort", abortCb);
+			socket.on("disconnect", abortCb);
+
+			res.on("error", (err) => {
+				socket.off("disconnect", abortCb);
+				socket.off("abort", abortCb);
+				res.removeAllListeners();
+				res.destroy();
+
+				console.error("Response read error: ", err);
+				socket.emit("err", id, String(err));
+			});
+			res.on("data", (data) => {
+				socket.emit("data", id, data);
+			});
+			res.on("end", () => {
+				res.removeAllListeners();
+				res.destroy();
+
+				socket.off("disconnect", abortCb);
+				socket.off("abort", abortCb);
+				socket.emit("end", id);
+			});
+		});
+		outgoing.on("upgrade", (res, dup, head) => {
+			res.destroy();
+			dup.destroy();
+			socket.emit("err", id, "Invalid remote response");
+		});
+		outgoing.on("error", (err) => {
+			console.error("Network request error: ", err);
+			socket.emit("err", id, String(err));
+		});
 	});
 });
