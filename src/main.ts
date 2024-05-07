@@ -3,13 +3,12 @@ import dns from "dns";
 import url from "url";
 import Path from "path"
 import http from "http";
-import https from "https";
 import crypto from "crypto";
 import worker from "worker_threads";
-import discord from "discord.js";
+import AsyncLock from "./AsyncLock.js";
+import * as discord from "discord.js";
 import { Server, Socket } from "socket.io";
 import { Token, getLlama } from "node-llama-cpp";
-import { AsyncLock } from "./AsyncLock.js";
 
 function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
 	const method = req.method;
@@ -143,14 +142,13 @@ async function handleLogin(token: string, signal: AbortSignal): Promise<string> 
 			encoding: "utf-8"
 		});
 
-		let avatar: ArrayBuffer | null = await fetchBuffer(user.picture, signal);
-		if (avatar == null)
-			avatar = fs.readFileSync("./res/user.png").buffer;
-
-		fs.writeFileSync("./local/avatar/" + uid + ".jpg", Buffer.from(avatar), {
-			mode: 0o600,
-			flush: true
-		});
+		const avatar: ArrayBuffer | null = await fetchBuffer(user.picture, signal);
+		if (avatar != null) {
+			fs.writeFileSync("./local/avatar/" + uid + ".jpg", Buffer.from(avatar), {
+				mode: 0o600,
+				flush: true
+			});
+		}
 
 		return secrets;
 	}
@@ -159,7 +157,7 @@ async function handleLogin(token: string, signal: AbortSignal): Promise<string> 
 }
 
 async function handleLogin2(user: string, pass: string, signal: AbortSignal): Promise<string> {
-	if (typeof user !== "string" || (user = user.trim().toLowerCase()).length < 4 || user.length > 20 || !/^[\-a-z0-9]+/.test(user))
+	if (typeof user !== "string" || (user = user.trim().toLowerCase()).length < 4 || user.length > 20 || !/^[\-a-z0-9]+$/.test(user))
 		throw new Error("Invalid user ID");
 	if (typeof pass !== "string" || pass.length < 8 || pass.length > 30)
 		throw new Error("Invalid password");
@@ -180,7 +178,7 @@ async function handleLogin2(user: string, pass: string, signal: AbortSignal): Pr
 }
 
 async function handleRegister(user: string, pass: string, signal: AbortSignal): Promise<string> {
-	if (typeof user !== "string" || (user = user.trim().toLowerCase()).length < 4 || user.length > 20 || !/^[\-a-z0-9]+/.test(user))
+	if (typeof user !== "string" || (user = user.trim().toLowerCase()).length < 4 || user.length > 20 || !/^[\-a-z0-9]+$/.test(user))
 		throw new Error("Invalid user ID");
 	if (typeof pass !== "string" || pass.length < 8 || pass.length > 30)
 		throw new Error("Invalid password");
@@ -214,10 +212,6 @@ async function handleRegister(user: string, pass: string, signal: AbortSignal): 
 		flush: true,
 		encoding: "utf-8"
 	});
-	fs.cpSync("./res/user.png", "./local/avatar/" + uid + ".jpg", {
-		dereference: true,
-		errorOnExist: true
-	});
 
 	return secrets;
 }
@@ -236,9 +230,13 @@ function handleUserInfoSync(uid: string): any {
 		}
 	}
 
+	const avatar = "./local/avatar/" + uid + ".jpg";
+
 	return {
 		id: info.id,
-		avatar: fs.readFileSync("./local/avatar/" + uid + ".jpg")
+		//uid: info.uid,
+		vip: info.vip,
+		avatar: fs.readFileSync(fs.existsSync(avatar) ? avatar : "./res/user.png")
 	};
 }
 
@@ -262,9 +260,15 @@ async function handleUserInfo(uid: string, signal: AbortSignal): Promise<any> {
 		}
 	}
 
+	const avatar = "./local/avatar/" + uid + ".jpg";
+
 	return {
 		id: info.id,
-		avatar: await fs.promises.readFile("./local/avatar/" + uid + ".jpg", { signal: signal })
+		uid: info.uid,
+		vip: info.vip,
+		avatar: await fs.promises.readFile(fs.existsSync(avatar) ? avatar : "./res/user.png", {
+			signal: signal
+		})
 	};
 }
 
@@ -292,6 +296,7 @@ async function handleUserData(secrets: string, signal: AbortSignal): Promise<any
 		throw new Error("Invalid credentials");
 
 	const uid = info.uid;
+	const avatar = "./local/avatar/" + uid + ".jpg";
 
 	return {
 		id: info.id,
@@ -299,14 +304,16 @@ async function handleUserData(secrets: string, signal: AbortSignal): Promise<any
 		vip: info.vip,
 		name: info.name,
 		email: info.email,
-		avatar: (await fs.promises.readFile("./local/avatar/" + uid + ".jpg", { signal: signal })).buffer
+		avatar: await fs.promises.readFile(fs.existsSync(avatar) ? avatar : "./res/user.png", {
+			signal: signal
+		})
 	};
 }
 
 async function handleChangeId(secrets: string, newId: string, signal: AbortSignal): Promise<void> {
 	if (typeof secrets !== "string" || secrets.length !== 2048)
 		throw new Error("Invalid token");
-	if (typeof newId !== "string" || (newId = newId.trim().toLowerCase()).length < 4 || newId.length > 20 || !/^[\-a-z0-9]+/.test(newId))
+	if (typeof newId !== "string" || (newId = newId.trim().toLowerCase()).length < 4 || newId.length > 20 || !/^[\-a-z0-9]+$/.test(newId))
 		throw new Error("Invalid new ID");
 
 	const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
@@ -434,22 +441,26 @@ async function handleRequestMessages(chId: string, bef: string | undefined, aft:
 			throw new Error("Unsupported channel type: " + channel.type);
 	}
 
-	const messages: {
-		readonly id: string;
-		readonly msg: string;
-		readonly user: string;
-		readonly icon: string | Buffer;
-	}[] = [];
+	const messages: Message[] = [];
 
 	for (const msg of (await channel.messages.fetch({
 		before: bef,
 		after: aft,
-		limit: 10,
+		limit: 20,
 		cache: true
 	})).values()) {
 		const text = msg.content.trim();
 		const msgId = msg.id;
 		const author = msg.author;
+
+		const files: MessageFile[] = [];
+		for (const f of msg.attachments.values()) {
+			files.push({
+				type: f.contentType || "application/octet-stream",
+				name: f.name,
+				url: f.url
+			});
+		}
 
 		if (author.id === user.id) {
 			const uid = JSON.parse(await fs.promises.readFile("./local/msgs.json", {
@@ -458,12 +469,15 @@ async function handleRequestMessages(chId: string, bef: string | undefined, aft:
 			}))[msg.id];
 
 			if (uid != null) {
-				const { id, avatar } = await handleUserInfo(uid, signal);
+				const { id, vip, avatar } = await handleUserInfo(uid, signal);
 				messages.push({
 					id: msgId,
 					msg: text.slice(text.indexOf("\n") + 1),
+					vip: vip,
+					uid: uid,
 					user: id,
-					icon: avatar
+					icon: avatar,
+					files: files
 				});
 			}
 		} else {
@@ -475,7 +489,8 @@ async function handleRequestMessages(chId: string, bef: string | undefined, aft:
 					size: 64,
 					extension: "jpg",
 					forceStatic: true
-				}) || "/res/user.svg"
+				}) || "/res/user.svg",
+				files: files
 			});
 		}
 	}
@@ -491,8 +506,9 @@ async function handlePostMessage(secrets: string, chId: string, text: string, si
 	if (typeof text !== "string" || ((text = text.trim())).length === 0)
 		throw new Error("Invalid message");
 
+	let user: string | null = null;
 	let uid: string | null = null;
-	let name: string | null = null;
+	let vip: number | null = null;
 
 	{
 		const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
@@ -503,8 +519,9 @@ async function handlePostMessage(secrets: string, chId: string, text: string, si
 		for (const k of Object.keys(list)) {
 			const v = list[k];
 			if (v.secrets === secrets) {
+				user = k;
 				uid = v.uid;
-				name = k;
+				vip = v.vip;
 				break;
 			}
 		}
@@ -512,7 +529,7 @@ async function handlePostMessage(secrets: string, chId: string, text: string, si
 
 	if (uid == null)
 		throw new Error("Invalid credentials");
-	if (name == null)
+	if (user == null || vip == null)
 		throw new Error("User data is corrupted: " + uid);
 
 	const channel = await client.channels.fetch(chId, {
@@ -533,10 +550,40 @@ async function handlePostMessage(secrets: string, chId: string, text: string, si
 			throw new Error("Unsupported channel type: " + channel.type);
 	}
 
-	const avatar = await fs.promises.readFile("./local/avatar/" + uid + ".jpg", { signal: signal });
-	const msgId = (await channel.send("**" + name + ":**\n" + text)).id;
-	for (const socket of chatSockets)
-		socket.emit("msg", chId, msgId, text, name, avatar);
+	if (vip === 4 && text === "/reset") {
+		while (true) {
+			const msgs = await channel.messages.fetch({
+				limit: 100,
+				cache: false
+			});
+			const end = msgs.size !== 100;
+
+			for (const msg of msgs.values()) {
+				try {
+					await msg.delete();
+				} catch (err) {
+					console.log(err);
+				}
+			}
+
+			if (end) break;
+		}
+		return;
+	}
+
+	const avatar = "./local/avatar/" + uid + ".jpg";
+	const msgId = (await channel.send("**" + user + ":**\n" + text)).id;
+	for (const socket of chatSockets) {
+		socket.emit("msg", chId, {
+			id: msgId,
+			msg: text,
+			uid: uid,
+			vip: vip,
+			user: user,
+			icon: fs.readFileSync(fs.existsSync(avatar) ? avatar : "./res/user.png"),
+			files: []
+		});
+	}
 
 	{
 		const list = JSON.parse(fs.readFileSync("./local/msgs.json", "utf-8"));
@@ -547,103 +594,6 @@ async function handlePostMessage(secrets: string, chId: string, text: string, si
 			encoding: "utf-8"
 		});
 	}
-}
-
-async function handleUploadGames(secrets: string, data: any[], signal: AbortSignal): Promise<void> {
-	if (typeof secrets !== "string" || secrets.length !== 2048)
-		throw new Error("Invalid token");
-
-	const [name, type, tags, desc, buffer] = data;
-	if (typeof name !== "string" || typeof type !== "string" || typeof tags !== "string" || typeof desc !== "string")
-		throw new Error("Invalid upload options");
-	if (!ArrayBuffer.isView(buffer) || buffer.byteLength === 0 || buffer.byteLength > 26214400)
-		throw new Error("Invalid upload data");
-
-	let uid: string | null = null;
-
-	{
-		const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
-			signal: signal,
-			encoding: "utf-8"
-		}));
-
-		for (const k of Object.keys(list)) {
-			const v = list[k];
-			if (v.secrets === secrets) {
-				uid = v.uid;
-				break;
-			}
-		}
-	}
-
-	if (uid == null)
-		throw new Error("Invalid credentials");
-
-	const index = JSON.parse(fs.readFileSync("./local/games/index.json", "utf-8"));
-	const nameMap: Record<string, string> = {
-		"html5": ".zip",
-		"flash": ".swf",
-		"dos": ".jsdos"
-	};
-
-	const extname = nameMap[type];
-	if (extname == null)
-		throw new Error("Invalid game type");
-
-	const fileName = Path.join("/games/", type, name.toLowerCase().replace(/[^0-9a-z\-]/g, (ch) => {
-		switch (ch) {
-			case "-":
-			case " ":
-			case "\t":
-			case "\n":
-				return "-";
-			default:
-				return "";
-		}
-	}) + extname);
-
-	{
-		const absFile = Path.join("./local/", fileName);
-		if (fs.existsSync(absFile))
-			throw new Error("The game already exists.");
-
-		fs.writeFileSync(absFile, buffer as any, {
-			mode: 0o600,
-			flush: true,
-			encoding: "utf-8"
-		});
-	}
-
-	index.push({
-		name: name,
-		type: type,
-		tags: tags,
-		desc: desc,
-		file: fileName,
-		date: Date.now(),
-		user: uid
-	});
-
-	fs.writeFileSync("./local/games/index.json", JSON.stringify(index, void 0, "\t"), {
-		mode: 0o600,
-		flush: true,
-		encoding: "utf-8"
-	});
-}
-
-const enum SIOPath {
-	login = 0,
-	login2 = 10,
-	register = 11,
-	userinfo = 1,
-	userdata = 2,
-	changeid = 3,
-	changeavatar = 4,
-	changePassword = 9,
-
-	requestmessages = 7,
-	postmessage = 8,
-	uploadgame = 5,
 }
 
 async function handleFetch(path: SIOPath, data: any, signal: AbortSignal): Promise<any> {
@@ -668,8 +618,6 @@ async function handleFetch(path: SIOPath, data: any, signal: AbortSignal): Promi
 			return await handleRequestMessages(data[0], data[1], data[2], signal);
 		case SIOPath.postmessage:
 			return await handlePostMessage(data[0], data[1], data[2], signal);
-		case SIOPath.uploadgame:
-			return await handleUploadGames(data.shift(), data, signal);
 		default:
 			throw new Error("Invalid path: " + path);
 	}
@@ -707,6 +655,7 @@ dns.promises.setDefaultResultOrder("ipv4first");
 dns.promises.setServers(["1.1.1.1", "1.0.0.1"]);
 
 fs.rmSync("./local/sessions", { force: true, recursive: true });
+fs.mkdirSync("./local/games", { mode: 0o700, recursive: true });
 fs.mkdirSync("./local/avatar", { mode: 0o700, recursive: true });
 fs.mkdirSync("./local/chrome", { mode: 0o700, recursive: true });
 fs.mkdirSync("./local/models", { mode: 0o700, recursive: true });
@@ -741,7 +690,8 @@ const eos = model.tokens.eosString || "<|im_end|>";
 const client = new discord.Client<true>({
 	intents: 33280,
 	closeTimeout: 2000,
-	failIfNotExists: true
+	failIfNotExists: true,
+	waitGuildTimeout: 5000
 });
 
 await client.login("MTIxNzE3MjE0Mjk0MTI3ODM2OA.GaNK5a.jTaZ-4b71zCAR3pnsLB-ZS4v6SMm3leh5HSx6E");
@@ -750,16 +700,25 @@ await new Promise((resolve) => {
 });
 
 const user = client.user;
-await user.setAvatar("./res/logo512.png");
-await user.setUsername("WhiteSpider");
-user.setAFK(true, 0);
-user.setStatus("idle", 0);
-user.setActivity({
-	url: "https://whitespider.dev/",
-	name: "Loading...",
-	type: discord.ActivityType.Custom,
-	state: "",
-	shardId: 0
+try {
+	await user.setBanner("./res/banner.png");
+	await user.setAvatar("./res/logo512.png");
+	await user.setUsername("WhiteSpider\ud83d\udc51");
+} catch (err) {
+}
+
+user.setPresence({
+	afk: true,
+	status: "idle",
+	shardId: 0,
+	activities: [
+		{
+			url: "https://whitespider.dev/",
+			name: "Loading...",
+			type: discord.ActivityType.Custom,
+			state: "Online",
+		}
+	]
 });
 console.log("Logged in as " + user.tag);
 
@@ -769,28 +728,48 @@ client.on("messageCreate", (msg) => {
 	const text = msg.content.trim();
 	const msgId = msg.id;
 	const author = msg.author;
-	const channel = msg.channelId
+	const channel = msg.channelId;
+
+	const files: MessageFile[] = [];
+	for (const f of msg.attachments.values()) {
+		files.push({
+			type: f.contentType || "application/octet-stream",
+			name: f.name,
+			url: f.url
+		});
+	}
 
 	if (author.id === user.id) {
 		const uid = JSON.parse(fs.readFileSync("./local/msgs.json", "utf-8"))[msgId];
-
 		if (uid != null) {
-			const { id, avatar } = handleUserInfoSync(uid);
+			const { id, vip, avatar } = handleUserInfoSync(uid);
 			const content = text.slice(text.indexOf("\n") + 1);
 
-			for (const socket of chatSockets)
-				socket.emit("msg", channel, msgId, content, id, avatar);
+			for (const socket of chatSockets) {
+				socket.emit("msg", channel, {
+					id: msgId,
+					msg: content,
+					uid: uid,
+					vip: vip,
+					user: id,
+					icon: avatar,
+					files: files
+				});
+			}
 		}
 	} else {
 		for (const socket of chatSockets) {
-			const user = author.username;
-			const avatar = author.avatarURL({
-				size: 64,
-				extension: "jpg",
-				forceStatic: true
+			socket.emit("msg", channel, {
+				id: msgId,
+				msg: text,
+				user: author.username,
+				icon: author.avatarURL({
+					size: 64,
+					extension: "jpg",
+					forceStatic: true
+				}) || "/res/user.svg",
+				files: files
 			});
-
-			socket.emit("msg", channel, msgId, text, user, avatar);
 		}
 	}
 });
@@ -837,7 +816,7 @@ httpServer.on("error", errorCB);
 //////////////////////////////////////////////////
 
 const _io_ = new Server(httpServer, {
-	path: "/___api__/",
+	path: "/_api_/",
 	cors: {
 		origin: true,
 		maxAge: 7200,
@@ -851,7 +830,7 @@ const _io_ = new Server(httpServer, {
 	upgradeTimeout: 5000,
 	httpCompression: true,
 	perMessageDeflate: true,
-	maxHttpBufferSize: 30000000,
+	maxHttpBufferSize: 28000000,
 	destroyUpgrade: true,
 	destroyUpgradeTimeout: 1000,
 	cleanupEmptyChildNamespaces: true
@@ -915,28 +894,45 @@ _io_.on("connection", (socket) => {
 				stackSizeMb: 8
 			}
 		});
-		socket.onAny((...args: any[]) => thread.postMessage(args));
+		const callback = (...args: any[]) => {
+			thread.postMessage(args);
+		};
 
-		thread.on("message", (args: [string, ...any]) => socket.emit(...args));
+		socket.onAny(callback);
+		thread.on("message", (args: [string, ...any]) => {
+			socket.emit(...args);
+		});
 		thread.on("error", (err) => {
 			console.error("Worker Error: ", err);
-			socket.offAny();
+			socket.offAny(callback);
 			thread.removeAllListeners();
 			try {
-				fs.rmSync(dataDir, { force: true, recursive: true });
+				fs.rmSync(dataDir, {
+					force: true,
+					recursive: true,
+					maxRetries: 10,
+					retryDelay: 500
+				});
 			} catch (err) { }
 			endSession = void 0;
 		});
+		thread.on("exit", () => {
+			socket.offAny(callback);
+			thread.removeAllListeners();
+			try {
+				fs.rmSync(dataDir, {
+					force: true,
+					recursive: true,
+					maxRetries: 10,
+					retryDelay: 500
+				});
+			} catch (err) { }
+			endSession = void 0
+		});
 		endSession = () => {
-			socket.offAny();
+			socket.offAny(callback);
 			thread.removeAllListeners();
 			thread.postMessage(["stop"]);
-			thread.once("exit", () => {
-				try {
-					fs.rmSync(dataDir, { force: true, recursive: true });
-				} catch (err) { }
-				endSession = void 0;
-			});
 		};
 	});
 
@@ -976,6 +972,94 @@ _io_.on("connection", (socket) => {
 				socket.off("disconnect", callback);
 				socket.emit("res", id, void 0, String(err));
 			});
+	});
+
+	socket.on("ug", (secrets: string, name: string, type: string, tags: string, desc: string, buffer: Buffer) => {
+		if (endSession != null || typeof secrets !== "string" || secrets.length !== 2048 ||
+			typeof name !== "string" || (name = name.trim()).length < 1 || name.length > 256 ||
+			typeof tags !== "string" || (tags = tags.toLowerCase().trim()).length > 300 ||
+			typeof desc !== "string" || (desc = desc.trim()).length > 5000 ||
+			!ArrayBuffer.isView(buffer) || buffer.byteLength < 1 || buffer.byteLength > 26214400) {
+			socket.disconnect(true);
+			return;
+		}
+
+		let uid: string | undefined;
+		let ext: string | undefined;
+
+		switch (type) {
+			case "html5":
+				ext = ".zip";
+				break;
+			case "flash":
+				ext = ".swf";
+				break;
+			case "dos":
+				ext = ".jsdos";
+				break;
+			default:
+				socket.disconnect(true);
+				return;
+		}
+
+		{
+			const list = JSON.parse(fs.readFileSync("./local/users.json", "utf-8"))
+			for (const k of Object.keys(list)) {
+				const v = list[k];
+				if (v.secrets === secrets) {
+					uid = v.uid;
+					break;
+				}
+			}
+		}
+
+		if (uid == null) {
+			socket.disconnect(true);
+			return;
+		}
+
+		const file = Path.join("/games/", type, name.toLowerCase().replace(/[^0-9a-z\-]/g, (ch) => {
+			switch (ch) {
+				case "-":
+				case " ":
+				case "\t":
+				case "\n":
+					return "-";
+				default:
+					return "";
+			}
+		}) + ext);
+
+		{
+			const absFile = Path.join("./local/", file);
+			if (fs.existsSync(absFile)) {
+				socket.emit("ugerr", "A game with the same name and label already exists.");
+				return;
+			}
+
+			fs.writeFileSync(absFile, buffer, {
+				mode: 0o600,
+				flush: true
+			});
+
+			const list = JSON.parse(fs.readFileSync("./local/games/index.json", "utf-8"));
+			list.push({
+				name: name,
+				type: type,
+				tags: tags,
+				desc: desc,
+				file: file,
+				date: Date.now(),
+				user: uid
+			});
+			fs.writeFileSync("./local/games/index.json", JSON.stringify(list, void 0, "\t"), {
+				mode: 0o600,
+				flush: true,
+				encoding: "utf-8"
+			});
+
+			socket.emit("ugend");
+		}
 	});
 
 	socket.on("gptreq", async (messages) => {
@@ -1058,126 +1142,126 @@ _io_.on("connection", (socket) => {
 			await context.dispose();
 			socket.emit("gptend");
 		} catch (err) {
-			console.error("GPT request error: ", err);
-			socket.emit("gpterr");
+			console.error(err);
+			socket.emit("gpterr", String(err));
 		}
 
 		gpuLock.unlock();
 		endSession = void 0;
 	});
 
-	socket.on("netreq", async (id: string, url: string | URL, method: string, headers: any) => {
-		if (typeof url !== "string" || typeof method !== "string" || headers == null || typeof headers !== "object") {
-			socket.disconnect(true);
-			return;
-		}
+	// socket.on("netreq", async (id: string, url: string | URL, method: string, headers: any) => {
+	// 	if (typeof url !== "string" || typeof method !== "string" || headers == null || typeof headers !== "object") {
+	// 		socket.disconnect(true);
+	// 		return;
+	// 	}
 
-		const controller = new AbortController();
-		const signal = controller.signal;
+	// 	const controller = new AbortController();
+	// 	const signal = controller.signal;
 
-		const disCb = () => controller.abort();
-		socket.on("disconnect", disCb);
+	// 	const disCb = () => controller.abort();
+	// 	socket.on("disconnect", disCb);
 
-		let outgoing: http.ClientRequest;
+	// 	let outgoing: http.ClientRequest;
 
-		switch ((url = new URL(url)).protocol) {
-			case "http:":
-				outgoing = http.request({
-					protocol: "http:",
-					host: url.host,
-					port: url.port,
-					path: url.href.slice(url.origin.length),
-					signal: signal,
-					method: method,
-					headers: headers,
-					setHost: true
-				});
-				break;
-			case "https:":
-				outgoing = https.request({
-					protocol: "https:",
-					host: url.host,
-					port: url.port,
-					path: url.href.slice(url.origin.length),
-					signal: signal,
-					method: method,
-					headers: headers,
-					setHost: true
-				});
-				break;
-			default:
-				throw new Error("Unsupport URL protocol: " + url.protocol);
-		}
+	// 	switch ((url = new URL(url)).protocol) {
+	// 		case "http:":
+	// 			outgoing = http.request({
+	// 				protocol: "http:",
+	// 				host: url.host,
+	// 				port: url.port,
+	// 				path: url.href.slice(url.origin.length),
+	// 				signal: signal,
+	// 				method: method,
+	// 				headers: headers,
+	// 				setHost: true
+	// 			});
+	// 			break;
+	// 		case "https:":
+	// 			outgoing = https.request({
+	// 				protocol: "https:",
+	// 				host: url.host,
+	// 				port: url.port,
+	// 				path: url.href.slice(url.origin.length),
+	// 				signal: signal,
+	// 				method: method,
+	// 				headers: headers,
+	// 				setHost: true
+	// 			});
+	// 			break;
+	// 		default:
+	// 			throw new Error("Unsupport URL protocol: " + url.protocol);
+	// 	}
 
-		{
-			const dataCb = (msgId: string, data: ArrayBufferView) => {
-				if (msgId === id)
-					outgoing.write(data);
-			};
-			const endCb = (msgId: string) => {
-				if (msgId === id) {
-					socket.off("data", dataCb);
-					socket.off("end", endCb);
-					outgoing.end();
-				}
-			};
+	// 	{
+	// 		const dataCb = (msgId: string, data: ArrayBufferView) => {
+	// 			if (msgId === id)
+	// 				outgoing.write(data);
+	// 		};
+	// 		const endCb = (msgId: string) => {
+	// 			if (msgId === id) {
+	// 				socket.off("data", dataCb);
+	// 				socket.off("end", endCb);
+	// 				outgoing.end();
+	// 			}
+	// 		};
 
-			socket.on("data", dataCb);
-			socket.on("end", endCb);
-		}
+	// 		socket.on("data", dataCb);
+	// 		socket.on("end", endCb);
+	// 	}
 
-		outgoing.on("response", (res) => {
-			socket.off("disconnect", disCb);
+	// 	outgoing.on("response", (res) => {
+	// 		socket.off("disconnect", disCb);
 
-			const headers: Record<string, any> = res.headers;
-			for (const k of Object.keys(headers)) {
-				const v = headers[k];
-				if (typeof v === "string")
-					headers[k] = [v];
-			}
-			socket.emit("head", id, res.statusCode || 200, res.statusMessage || "", headers);
+	// 		const headers: Record<string, any> = res.headers;
+	// 		for (const k of Object.keys(headers)) {
+	// 			const v = headers[k];
+	// 			if (typeof v === "string")
+	// 				headers[k] = [v];
+	// 		}
+	// 		socket.emit("head", id, res.statusCode || 200, res.statusMessage || "", headers);
 
-			const abortCb = (msgId: string) => {
-				if (msgId === id) {
-					res.removeAllListeners();
-					res.destroy();
+	// 		const abortCb = (msgId: string) => {
+	// 			if (msgId === id) {
+	// 				res.removeAllListeners();
+	// 				res.destroy();
 
-					socket.off("abort", abortCb);
-					controller.abort();
-				}
-			};
-			socket.on("abort", abortCb);
-			socket.on("disconnect", abortCb);
+	// 				socket.off("abort", abortCb);
+	// 				controller.abort();
+	// 			}
+	// 		};
+	// 		socket.on("abort", abortCb);
+	// 		socket.on("disconnect", abortCb);
 
-			res.on("error", (err) => {
-				socket.off("disconnect", abortCb);
-				socket.off("abort", abortCb);
-				res.removeAllListeners();
-				res.destroy();
+	// 		res.on("error", (err) => {
+	// 			socket.off("disconnect", abortCb);
+	// 			socket.off("abort", abortCb);
+	// 			res.removeAllListeners();
+	// 			res.destroy();
 
-				console.error("Response read error: ", err);
-				socket.emit("err", id, String(err));
-			});
-			res.on("data", (data) => {
-				socket.emit("data", id, data);
-			});
-			res.on("end", () => {
-				res.removeAllListeners();
-				res.destroy();
+	// 			console.error("Response read error: ", err);
+	// 			socket.emit("err", id, String(err));
+	// 		});
+	// 		res.on("data", (data) => {
+	// 			socket.emit("data", id, data);
+	// 		});
+	// 		res.on("end", () => {
+	// 			res.removeAllListeners();
+	// 			res.destroy();
 
-				socket.off("disconnect", abortCb);
-				socket.off("abort", abortCb);
-				socket.emit("end", id);
-			});
-		});
-		outgoing.on("upgrade", (res, dup, head) => {
-			res.destroy();
-			dup.destroy();
-			socket.emit("err", id, "Invalid remote response");
-		});
-		outgoing.on("error", (err) => {
-			console.error("Network request error: ", err);
-			socket.emit("err", id, String(err));
-		});
-	});
+	// 			socket.off("disconnect", abortCb);
+	// 			socket.off("abort", abortCb);
+	// 			socket.emit("end", id);
+	// 		});
+	// 	});
+	// 	outgoing.on("upgrade", (res, dup, head) => {
+	// 		res.destroy();
+	// 		dup.destroy();
+	// 		socket.emit("err", id, "Invalid remote response");
+	// 	});
+	// 	outgoing.on("error", (err) => {
+	// 		console.error("Network request error: ", err);
+	// 		socket.emit("err", id, String(err));
+	// 	});
+	// });
 });

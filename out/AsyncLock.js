@@ -1,4 +1,4 @@
-export const AsyncLock = class AsyncLock {
+const AsyncLock = class AsyncLock {
     #v0 = false;
     #g0 = [];
     static {
@@ -34,3 +34,4 @@ export const AsyncLock = class AsyncLock {
         this.#v0 = false;
     }
 };
+export default AsyncLock;

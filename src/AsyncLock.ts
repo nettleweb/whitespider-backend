@@ -1,14 +1,4 @@
-export interface AsyncLock extends PromiseLike<void> {
-	readonly locked: boolean;
-	readonly lock: () => void;
-	readonly unlock: () => void;
-}
-export interface AsyncLockConstructor {
-	new(): AsyncLock;
-	readonly prototype: AsyncLock;
-}
-
-export const AsyncLock: AsyncLockConstructor = class AsyncLock {
+const AsyncLock: globalThis.AsyncLockConstructor = class AsyncLock implements globalThis.AsyncLock {
 	#v0: boolean = false;
 	#g0: Function[] = [];
 
@@ -49,4 +39,6 @@ export const AsyncLock: AsyncLockConstructor = class AsyncLock {
 		cbs.length = 0;
 		this.#v0 = false;
 	}
-}
+};
+
+export default AsyncLock;
