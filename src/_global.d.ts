@@ -29,6 +29,7 @@ declare global {
 	}
 
 	export const enum SIOPath {
+		// basic account operations
 		login = 0,
 		login2 = 10,
 		register = 11,
@@ -37,9 +38,12 @@ declare global {
 		changeid = 3,
 		changeavatar = 4,
 		changePassword = 9,
-	
+
+		// chat operations
+		discorduserinfo = 6,
 		requestmessages = 7,
+		postFileMessage = 12,
 		postmessage = 8
 	}
 }
-export {};
+export { };

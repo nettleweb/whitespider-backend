@@ -294,7 +294,7 @@ async function handleChangeId(secrets, newId, signal) {
 async function handleChangeAvatar(secrets, img, signal) {
     if (typeof secrets !== "string" || secrets.length !== 2048)
         throw new Error("Invalid token");
-    if (!ArrayBuffer.isView(img) || img.byteLength === 0 || img.byteLength > 2097152)
+    if (!ArrayBuffer.isView(img) || img.byteLength < 1 || img.byteLength > 2097152)
         throw new Error("Invalid image data");
     let uid = null;
     {
@@ -420,16 +420,16 @@ async function handleRequestMessages(chId, bef, aft, signal) {
     }
     return messages;
 }
-async function handlePostMessage(secrets, chId, text, signal) {
+async function handlePostFileMessage(secrets, chId, files, signal) {
     if (typeof secrets !== "string" || secrets.length !== 2048)
         throw new Error("Invalid token");
     if (typeof chId !== "string" || chId.length === 0)
         throw new Error("Invalid channel ID");
-    if (typeof text !== "string" || ((text = text.trim())).length === 0)
-        throw new Error("Invalid message");
-    let user = null;
+    if (!Array.isArray(files) || files.length < 1 || files.length > 10)
+        throw new Error("Invalid attachment data");
     let uid = null;
     let vip = null;
+    let user = null;
     {
         const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
             signal: signal,
@@ -438,9 +438,80 @@ async function handlePostMessage(secrets, chId, text, signal) {
         for (const k of Object.keys(list)) {
             const v = list[k];
             if (v.secrets === secrets) {
-                user = k;
                 uid = v.uid;
                 vip = v.vip;
+                user = k;
+                break;
+            }
+        }
+    }
+    if (uid == null)
+        throw new Error("Invalid credentials");
+    if (user == null)
+        throw new Error("User data is corrupted: " + uid);
+    const channel = await client.channels.fetch(chId, {
+        cache: true,
+        force: true,
+        allowUnknownGuild: false
+    });
+    if (channel == null)
+        throw new Error("Failed to resolve channel: " + chId);
+    if (channel.type !== discord.ChannelType.GuildText || !channel.nsfw)
+        throw new Error("Invalid channel for posting files.");
+    const msg = await channel.send({ files });
+    const msgId = msg.id;
+    const avatar = "./local/avatar/" + uid + ".jpg";
+    const avatarBuf = fs.readFileSync(fs.existsSync(avatar) ? avatar : "./res/user.png");
+    files.length = 0;
+    for (const f of msg.attachments.values()) {
+        files.push({
+            type: f.contentType || "application/octet-stream",
+            name: f.name,
+            url: f.url
+        });
+    }
+    for (const socket of chatSockets) {
+        socket.emit("msg", chId, {
+            id: msgId,
+            msg: "",
+            uid: uid,
+            vip: vip,
+            user: user,
+            icon: avatarBuf,
+            files: files
+        });
+    }
+    {
+        const list = JSON.parse(fs.readFileSync("./local/msgs.json", "utf-8"));
+        list[msgId] = uid;
+        fs.writeFileSync("./local/msgs.json", JSON.stringify(list, void 0, "\t"), {
+            mode: 0o600,
+            flush: true,
+            encoding: "utf-8"
+        });
+    }
+}
+async function handlePostMessage(secrets, chId, text, signal) {
+    if (typeof secrets !== "string" || secrets.length !== 2048)
+        throw new Error("Invalid token");
+    if (typeof chId !== "string" || chId.length === 0)
+        throw new Error("Invalid channel ID");
+    if (typeof text !== "string" || ((text = text.trim())).length === 0)
+        throw new Error("Invalid message");
+    let uid = null;
+    let vip = null;
+    let user = null;
+    {
+        const list = JSON.parse(await fs.promises.readFile("./local/users.json", {
+            signal: signal,
+            encoding: "utf-8"
+        }));
+        for (const k of Object.keys(list)) {
+            const v = list[k];
+            if (v.secrets === secrets) {
+                uid = v.uid;
+                vip = v.vip;
+                user = k;
                 break;
             }
         }
@@ -464,28 +535,9 @@ async function handlePostMessage(secrets, chId, text, signal) {
         default:
             throw new Error("Unsupported channel type: " + channel.type);
     }
-    if (vip === 4 && text === "/reset") {
-        while (true) {
-            const msgs = await channel.messages.fetch({
-                limit: 100,
-                cache: false
-            });
-            const end = msgs.size !== 100;
-            for (const msg of msgs.values()) {
-                try {
-                    await msg.delete();
-                }
-                catch (err) {
-                    console.log(err);
-                }
-            }
-            if (end)
-                break;
-        }
-        return;
-    }
-    const avatar = "./local/avatar/" + uid + ".jpg";
     const msgId = (await channel.send("**" + user + ":**\n" + text)).id;
+    const avatar = "./local/avatar/" + uid + ".jpg";
+    const avatarBuf = fs.readFileSync(fs.existsSync(avatar) ? avatar : "./res/user.png");
     for (const socket of chatSockets) {
         socket.emit("msg", chId, {
             id: msgId,
@@ -493,7 +545,7 @@ async function handlePostMessage(secrets, chId, text, signal) {
             uid: uid,
             vip: vip,
             user: user,
-            icon: fs.readFileSync(fs.existsSync(avatar) ? avatar : "./res/user.png"),
+            icon: avatarBuf,
             files: []
         });
     }
@@ -527,6 +579,8 @@ async function handleFetch(path, data, signal) {
             return await handleChangePassword(data[0], data[1], data[2], signal);
         case 7 /* SIOPath.requestmessages */:
             return await handleRequestMessages(data[0], data[1], data[2], signal);
+        case 12 /* SIOPath.postFileMessage */:
+            return await handlePostFileMessage(data[0], data[1], data[2], signal);
         case 8 /* SIOPath.postmessage */:
             return await handlePostMessage(data[0], data[1], data[2], signal);
         default:
@@ -650,16 +704,18 @@ client.on("messageCreate", (msg) => {
         }
     }
     else {
+        const user = author.username;
+        const icon = author.avatarURL({
+            size: 64,
+            extension: "jpg",
+            forceStatic: true
+        }) || "/res/user.svg";
         for (const socket of chatSockets) {
             socket.emit("msg", channel, {
                 id: msgId,
                 msg: text,
-                user: author.username,
-                icon: author.avatarURL({
-                    size: 64,
-                    extension: "jpg",
-                    forceStatic: true
-                }) || "/res/user.svg",
+                user: user,
+                icon: icon,
                 files: files
             });
         }
