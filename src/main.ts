@@ -543,7 +543,16 @@ async function handlePostFileMessage(secrets: string, chId: string, files: any[]
 	if (channel.type !== discord.ChannelType.GuildText || !channel.nsfw)
 		throw new Error("Invalid channel for posting files.");
 
-	const msg = await channel.send({ files });
+	const msg = await channel.send({
+		files: files,
+		content: "",
+		allowedMentions: {
+			parse: [],
+			roles: [],
+			users: []
+		}
+	});
+
 	const msgId = msg.id;
 	const avatar = "./local/avatar/" + uid + ".jpg";
 	const avatarBuf = fs.readFileSync(fs.existsSync(avatar) ? avatar : "./res/user.png");
@@ -611,7 +620,7 @@ async function handlePostMessage(secrets: string, chId: string, text: string, si
 
 	if (uid == null)
 		throw new Error("Invalid credentials");
-	if (user == null || vip == null)
+	if (user == null)
 		throw new Error("User data is corrupted: " + uid);
 
 	const channel = await client.channels.fetch(chId, {
@@ -632,7 +641,15 @@ async function handlePostMessage(secrets: string, chId: string, text: string, si
 			throw new Error("Unsupported channel type: " + channel.type);
 	}
 
-	const msgId = (await channel.send("**" + user + ":**\n" + text)).id;
+	const msgId = (await channel.send({
+		content: "**" + user + ":**\n" + text,
+		allowedMentions: {
+			parse: [],
+			roles: [],
+			users: []
+		}
+	})).id;
+
 	const avatar = "./local/avatar/" + uid + ".jpg";
 	const avatarBuf = fs.readFileSync(fs.existsSync(avatar) ? avatar : "./res/user.png");
 
@@ -889,13 +906,12 @@ const _io_ = new Server(httpServer, {
 		origin: true,
 		maxAge: 7200,
 		methods: ["GET", "HEAD"],
-		credentials: false,
-		optionsSuccessStatus: 200
+		credentials: false
 	},
 	pingTimeout: 10000,
 	pingInterval: 15000,
 	connectTimeout: 20000,
-	upgradeTimeout: 5000,
+	upgradeTimeout: 10000,
 	httpCompression: true,
 	perMessageDeflate: true,
 	maxHttpBufferSize: 28000000,
